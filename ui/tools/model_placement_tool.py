@@ -3,17 +3,8 @@
 # ============================================================
 # File:
 #     ui/tools/model_placement_tool.py
-#
-# Purpose:
-#     Shared UI-only placement behavior for concrete model tools.
-#
-# Architectural Role:
-#     Captures snapped scene-space placement intent and stops at the
-#     Application command boundary. It never mutates Core directly.
-#
-# Author:
-#     Subhendu Mishra
 # ============================================================
+"""Shared UI-only placement behavior for concrete model tools."""
 
 from __future__ import annotations
 
@@ -30,13 +21,11 @@ class ModelPlacementTool(ToolBase):
 
     def __init__(
         self,
-        controller: Any,
         command_manager: Any,
         selection_manager: Any,
         snap_system: Any,
     ) -> None:
         super().__init__(
-            controller=controller,
             command_manager=command_manager,
             selection_manager=selection_manager,
             snap_system=snap_system,
