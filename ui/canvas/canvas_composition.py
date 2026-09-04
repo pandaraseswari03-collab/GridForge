@@ -103,7 +103,6 @@ class CanvasComposer:
 
         tool_manager.register_tools(
             create_default_tool_factories(
-                controller=controller,
                 command_manager=command_manager,
                 selection_manager=selection_manager,
                 snap_system=snap_system,
