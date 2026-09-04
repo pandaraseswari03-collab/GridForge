@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from ui.core.line_creation_parameters import LineCreationParameters
 from ui.tools.battery_tool import BatteryTool
@@ -33,7 +33,6 @@ from ui.tools.switch_tool import SwitchTool
 from ui.tools.synchronous_machine_tool import SynchronousMachineTool
 from ui.tools.transformer_tool import TransformerTool
 
-
 ToolFactory = Callable[..., Any]
 
 
@@ -42,11 +41,17 @@ def create_default_tool_factories(
     command_manager: Any = None,
     selection_manager: Any,
     snap_system: Any,
-    line_creation_parameters: LineCreationParameters,
+    line_creation_parameters: Optional[LineCreationParameters] = None,
 ) -> dict[str, ToolFactory]:
-    """Return default factories with only explicit tool dependencies."""
-    if not isinstance(line_creation_parameters, LineCreationParameters):
-        raise TypeError("line_creation_parameters must be LineCreationParameters.")
+    """Return default factories with only explicit tool dependencies.
+
+    Line creation configuration is optional during bootstrap; when absent,
+    LineTool fails explicitly rather than inventing engineering values.
+    """
+    if line_creation_parameters is not None and not isinstance(
+        line_creation_parameters, LineCreationParameters
+    ):
+        raise TypeError("line_creation_parameters must be LineCreationParameters or None.")
 
     def factory(tool_class: type[Any]) -> ToolFactory:
         return lambda **_ignored: tool_class(
@@ -86,8 +91,8 @@ def create_default_tool_factories(
         "potential_transformer": factory(PotentialTransformerTool),
         "cvt": factory(CVTTool),
         "relay": factory(RelayTool),
+        "line": line_factory,
     }
-    factories["line"] = line_factory
     return factories
 
 
