@@ -33,27 +33,23 @@ from ui.tools.switch_tool import SwitchTool
 from ui.tools.synchronous_machine_tool import SynchronousMachineTool
 from ui.tools.transformer_tool import TransformerTool
 
+
 ToolFactory = Callable[..., Any]
 
 
 def create_default_tool_factories(
     *,
-    controller: Any,
     command_manager: Any = None,
     selection_manager: Any,
     snap_system: Any,
-    line_creation_parameters: LineCreationParameters | None = None,
+    line_creation_parameters: LineCreationParameters,
 ) -> dict[str, ToolFactory]:
-    """Return the standard concrete-tool factory mapping.
-
-    LineTool receives its engineering configuration explicitly rather than
-    reading it from Controller. Other legacy tools retain their existing
-    constructor contract until their own ownership is audited.
-    """
+    """Return default factories with only explicit tool dependencies."""
+    if not isinstance(line_creation_parameters, LineCreationParameters):
+        raise TypeError("line_creation_parameters must be LineCreationParameters.")
 
     def factory(tool_class: type[Any]) -> ToolFactory:
         return lambda **_ignored: tool_class(
-            controller=controller,
             command_manager=command_manager,
             selection_manager=selection_manager,
             snap_system=snap_system,
@@ -61,17 +57,15 @@ def create_default_tool_factories(
 
     def line_factory(**_ignored: Any) -> LineTool:
         return LineTool(
-            controller=controller,
             command_manager=command_manager,
             selection_manager=selection_manager,
             snap_system=snap_system,
             line_creation_parameters=line_creation_parameters,
         )
 
-    return {
+    factories = {
         "select": factory(SelectTool),
         "bus": factory(BusTool),
-        "line": line_factory,
         "cable": factory(CableTool),
         "transformer": factory(TransformerTool),
         "switch": factory(SwitchTool),
@@ -93,6 +87,8 @@ def create_default_tool_factories(
         "cvt": factory(CVTTool),
         "relay": factory(RelayTool),
     }
+    factories["line"] = line_factory
+    return factories
 
 
 __all__ = ["ToolFactory", "create_default_tool_factories"]
