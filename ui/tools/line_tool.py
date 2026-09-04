@@ -11,8 +11,6 @@
 #     LineTool captures connection intent and dispatches the
 #     existing CreateLineCommand through the Application boundary.
 #     Rendering is owned by the unified SLD projection path.
-#
-# Author: Subhendu Mishra
 # ============================================================
 
 from __future__ import annotations
@@ -21,6 +19,8 @@ from typing import Any, Optional, Tuple
 from uuid import uuid4
 
 from core.application.commands.model_commands import CreateLineCommand
+
+from ui.core.line_creation_parameters import LineCreationParameters
 
 from .endpoint_identity_adapter import EndpointIdentityAdapter
 from .tool_base import ToolBase
@@ -37,6 +37,7 @@ class LineTool(ToolBase):
         command_manager: Any,
         selection_manager: Any,
         snap_system: Any,
+        line_creation_parameters: Optional[LineCreationParameters] = None,
     ) -> None:
         super().__init__(
             controller=controller,
@@ -44,6 +45,7 @@ class LineTool(ToolBase):
             selection_manager=selection_manager,
             snap_system=snap_system,
         )
+        self.line_creation_parameters = line_creation_parameters
         self._start_position: Optional[Tuple[float, float]] = None
         self._current_position: Optional[Tuple[float, float]] = None
         self._start_endpoint: Any = None
@@ -156,26 +158,20 @@ class LineTool(ToolBase):
         return key in ("Escape", "escape", 0x01000000)
 
     def _execute_line_command(self, endpoint_from: Any, endpoint_to: Any) -> Any:
-        parameters = getattr(self.controller, "line_parameters", None)
-        if not isinstance(parameters, dict):
+        parameters = self.line_creation_parameters
+        if not isinstance(parameters, LineCreationParameters):
             raise RuntimeError(
-                "Line engineering parameters are not configured. The UI must not invent R/X/B/rating values."
-            )
-        required = ("r", "x", "rate_mva")
-        missing = [name for name in required if name not in parameters]
-        if missing:
-            raise RuntimeError(
-                "Line engineering parameters are incomplete: " + ", ".join(missing)
+                "LineCreationParameters are not configured. The UI must not invent R/X/B/rating values."
             )
         command = CreateLineCommand(
             line_id=f"line-{uuid4().hex}",
             endpoint_from=endpoint_from,
             endpoint_to=endpoint_to,
-            r=float(parameters["r"]),
-            x=float(parameters["x"]),
-            b=float(parameters.get("b", 0.0)),
-            name=str(parameters.get("name", "")),
-            rate_mva=float(parameters["rate_mva"]),
+            r=parameters.r,
+            x=parameters.x,
+            b=parameters.b,
+            name=parameters.name,
+            rate_mva=parameters.rate_mva,
         )
         return self.execute_command(command)
 
