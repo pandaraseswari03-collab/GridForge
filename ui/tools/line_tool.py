@@ -11,6 +11,8 @@
 #     LineTool captures connection intent and dispatches the
 #     existing CreateLineCommand through the Application boundary.
 #     Rendering is owned by the unified SLD projection path.
+#
+# Author: Subhendu Mishra
 # ============================================================
 
 from __future__ import annotations
@@ -33,14 +35,12 @@ class LineTool(ToolBase):
 
     def __init__(
         self,
-        controller: Any,
         command_manager: Any,
         selection_manager: Any,
         snap_system: Any,
         line_creation_parameters: Optional[LineCreationParameters] = None,
     ) -> None:
         super().__init__(
-            controller=controller,
             command_manager=command_manager,
             selection_manager=selection_manager,
             snap_system=snap_system,
