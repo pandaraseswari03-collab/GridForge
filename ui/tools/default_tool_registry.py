@@ -2,28 +2,13 @@
 # GridForge V2 — Default UI Tool Registry
 # Author: Subhendu Mishra
 # ============================================================
-"""Default concrete UI tool factories for GridForge V2.
-
-Architectural role
-------------------
-This module owns only the default mapping from stable tool IDs to
-factory callables. ToolManager remains the lifecycle owner, while the
-application/UI composition boundary supplies the shared interaction
-services.
-
-The registry contains interaction tools for concrete Core model types.
-It does not create Core objects, execute commands, render graphics, or
-own electrical truth.
-
-SLD rendering is deliberately outside the tool factory contract. The
-unified SLD projection/rendering path is owned by SLD projection and
-Canvas realization services.
-"""
+"""Default concrete UI tool factories for GridForge V2."""
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from ui.core.line_creation_parameters import LineCreationParameters
 from ui.tools.battery_tool import BatteryTool
 from ui.tools.breaker_tool import BreakerTool
 from ui.tools.bus_tool import BusTool
@@ -48,7 +33,6 @@ from ui.tools.switch_tool import SwitchTool
 from ui.tools.synchronous_machine_tool import SynchronousMachineTool
 from ui.tools.transformer_tool import TransformerTool
 
-
 ToolFactory = Callable[..., Any]
 
 
@@ -58,12 +42,13 @@ def create_default_tool_factories(
     command_manager: Any = None,
     selection_manager: Any,
     snap_system: Any,
+    line_creation_parameters: LineCreationParameters | None = None,
 ) -> dict[str, ToolFactory]:
     """Return the standard concrete-tool factory mapping.
 
-    Dependencies are captured by factories but concrete tools are not
-    instantiated here. ToolManager therefore retains lazy construction
-    and lifecycle ownership.
+    LineTool receives its engineering configuration explicitly rather than
+    reading it from Controller. Other legacy tools retain their existing
+    constructor contract until their own ownership is audited.
     """
 
     def factory(tool_class: type[Any]) -> ToolFactory:
@@ -74,10 +59,19 @@ def create_default_tool_factories(
             snap_system=snap_system,
         )
 
+    def line_factory(**_ignored: Any) -> LineTool:
+        return LineTool(
+            controller=controller,
+            command_manager=command_manager,
+            selection_manager=selection_manager,
+            snap_system=snap_system,
+            line_creation_parameters=line_creation_parameters,
+        )
+
     return {
         "select": factory(SelectTool),
         "bus": factory(BusTool),
-        "line": factory(LineTool),
+        "line": line_factory,
         "cable": factory(CableTool),
         "transformer": factory(TransformerTool),
         "switch": factory(SwitchTool),
