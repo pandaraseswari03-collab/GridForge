@@ -3,6 +3,9 @@
 # ============================================================
 # File:
 #     ui/tools/bus_tool.py
+#
+# Purpose:
+#     SLD bus-placement interaction tool.
 # ============================================================
 
 from __future__ import annotations
@@ -77,6 +80,7 @@ class BusTool(ToolBase):
             self._clear_state()
             return False
         self._position = position
+
         command = CreateBusCommand(
             bus_id=f"bus-{uuid4()}",
             name="Bus",
@@ -86,9 +90,9 @@ class BusTool(ToolBase):
             frequency_hz=50.0,
             in_service=True,
         )
-        result = self.execute_command(command)
+        self.execute_command(command)
         self._clear_state()
-        return result
+        return True
 
     def on_mouse_double_click(self, event: Any) -> bool:
         return self.on_mouse_press(event)
@@ -111,18 +115,40 @@ class BusTool(ToolBase):
 
     def _snap_position(self, event: Any) -> Optional[Tuple[float, float]]:
         scene_position = self.event_position(event)
-        snap = getattr(self.get_snap_system(), "snap", None)
+        snap_system = self.get_snap_system()
+        snap = getattr(snap_system, "snap", None)
         if not callable(snap):
             raise TypeError("SnapSystem must provide snap().")
-        result = snap(scene_position, allow_grid=True, allow_object=True)
+        result = snap(
+            scene_position,
+            allow_grid=True,
+            allow_object=True,
+        )
         position = getattr(result, "position", None)
         if position is None:
             return None
+        return self._position_tuple(position)
+
+    @staticmethod
+    def _position_tuple(position: Any) -> Tuple[float, float]:
         if hasattr(position, "x") and hasattr(position, "y"):
             return float(position.x()), float(position.y())
         if isinstance(position, (tuple, list)) and len(position) >= 2:
             return float(position[0]), float(position[1])
-        raise TypeError("SnapResult.position must provide x/y coordinates or a two-element position.")
+        raise TypeError(
+            "SnapResult.position must provide x/y coordinates or a two-element position."
+        )
+
+    @staticmethod
+    def _is_escape_event(event: Any) -> bool:
+        if event is None:
+            return False
+        key = getattr(event, "key", None)
+        if callable(key):
+            key = key()
+        if isinstance(event, dict):
+            key = event.get("key", key)
+        return key in ("Escape", "escape", 0x01000000)
 
     def _clear_state(self) -> None:
         self._position = None
@@ -130,7 +156,12 @@ class BusTool(ToolBase):
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
-        state.update({"position": self._position, "preview_active": self._preview_active})
+        state.update(
+            {
+                "position": self._position,
+                "preview_active": self._preview_active,
+            }
+        )
         return state
 
 
