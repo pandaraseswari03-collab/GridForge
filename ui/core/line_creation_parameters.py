@@ -11,9 +11,9 @@ class LineCreationParameters:
 
     r: float
     x: float
+    rate_mva: float
     b: float = 0.0
     name: str = ""
-    rate_mva: float = 100.0
 
     def __post_init__(self) -> None:
         for field_name in ("r", "x", "b", "rate_mva"):
