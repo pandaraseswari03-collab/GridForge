@@ -13,6 +13,7 @@ from ui.canvas.interaction_manager import InteractionManager
 from ui.canvas.navigation_controller import NavigationController
 from ui.canvas.preview_layer import PreviewLayer
 from ui.core.controller import Controller
+from ui.core.line_creation_parameters import LineCreationParameters
 from ui.core.qt import QWidget
 from ui.core.selection_manager import SelectionManager
 from ui.core.snap_system import SnapSystem
@@ -48,6 +49,7 @@ class CanvasComposer:
         controller: Controller,
         tool_manager: ToolManager,
         command_manager: Any,
+        line_creation_parameters: LineCreationParameters | None = None,
         parent: Optional[QWidget] = None,
     ) -> CanvasComposition:
         """Construct and wire one complete Canvas service graph."""
@@ -105,6 +107,7 @@ class CanvasComposer:
                 command_manager=command_manager,
                 selection_manager=selection_manager,
                 snap_system=snap_system,
+                line_creation_parameters=line_creation_parameters,
             )
         )
 
