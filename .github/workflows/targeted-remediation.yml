@@ -15,7 +15,20 @@ jobs:
           python-version: '3.12'
       - name: Install targeted dependencies
         run: python -m pip install --upgrade pip pytest numpy scipy
-      - name: Run targeted remediation tests
+      - name: Syntax-check remediation files
+        run: >-
+          python -m py_compile
+          core/analysis/contingency.py
+          core/analysis/line_flow.py
+          core/analysis/power_flow.py
+          core/analysis/power_flow_preparation.py
+          core/analysis/power_flow_result_conversion.py
+          core/analysis/transformer_flow.py
+          core/solver/power_flow/result.py
+          tests/core/analysis/test_power_flow_engineering_result_chain.py
+      - name: Run GF-AUD-007 focused tests
+        run: python -m pytest -q tests/core/analysis/test_power_flow_engineering_result_chain.py
+      - name: Run existing targeted regression tests
         run: >-
           python -m pytest -q
           tests/core/analysis/test_open_partial_preparation_contracts.py
