@@ -467,4 +467,43 @@ class ContingencyAnalysis:
         return self._result
 
 
+# Keep the violation contract unit-consistent: ``value``, ``limit`` and
+# ``severity`` are percentages. The equipment's MVA limit remains available
+# in PowerFlowResult.branch_results / transformer_results.
+def _detect_engineering_loading_violations_unit_consistent(
+    results: Any,
+    category: str,
+    default_limit: float,
+) -> List[ContingencyViolation]:
+    violations: List[ContingencyViolation] = []
+    for element_id, record in results.items():
+        loading = record.get("loading_percent")
+        if loading is None:
+            continue
+        try:
+            value = float(loading)
+        except (TypeError, ValueError):
+            continue
+        if not isfinite(value):
+            continue
+        limit_percent = 100.0 if record.get("limit_mva") is not None else float(default_limit)
+        within_limit = record.get("within_limit")
+        if within_limit is False or (within_limit is None and value > limit_percent):
+            violations.append(
+                ContingencyViolation(
+                    category=category,
+                    element_id=element_id,
+                    value=value,
+                    limit=limit_percent,
+                    severity=value - limit_percent,
+                )
+            )
+    return violations
+
+
+ContingencyAnalysis._detect_engineering_loading_violations = staticmethod(
+    _detect_engineering_loading_violations_unit_consistent
+)
+
+
 __all__ = ["ContingencyAnalysis", "ContingencyResult", "ContingencyCaseResult", "ContingencyViolation"]
