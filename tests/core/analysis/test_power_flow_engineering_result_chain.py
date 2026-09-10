@@ -153,6 +153,10 @@ def test_contingency_violations_use_stable_id_engineering_results():
         message="Converged",
         voltage_magnitudes=(1.0, 0.98),
         voltage_angles=(0.0, 0.0),
+        bus_results={
+            "B2": {"voltage_magnitude": 0.90},
+            "B1": {"voltage_magnitude": 1.10},
+        },
         branch_results={"L-42": {"loading_percent": 125.0, "limit_mva": 80.0, "within_limit": False}},
         transformer_results={"T-7": {"loading_percent": 110.0, "limit_mva": 100.0, "within_limit": False}},
     )
@@ -162,10 +166,12 @@ def test_contingency_violations_use_stable_id_engineering_results():
     )
 
     assert [(v.category, v.element_id) for v in violations] == [
+        ("voltage_low", "B2"),
+        ("voltage_high", "B1"),
         ("thermal", "L-42"),
         ("transformer_thermal", "T-7"),
     ]
-    assert all(v.limit == 100.0 for v in violations)
+    assert all(v.limit == 100.0 for v in violations[2:])
     assert all(v.severity > 0.0 for v in violations)
 
 
