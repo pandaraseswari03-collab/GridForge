@@ -1,3 +1,5 @@
+# Endpoint integrity verification is intentionally branch-scoped so the
+# remediation evidence is isolated from unrelated repository workflows.
 name: GridForge endpoint integrity
 
 on:
