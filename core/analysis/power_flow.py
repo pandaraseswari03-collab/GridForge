@@ -1,40 +1,22 @@
-"""
-GridForge - Power Flow Analysis
-================================
-
-Analysis-level orchestration for prepared numerical Power Flow studies.
-Numerical execution remains PU-only; engineering result conversion is
-performed explicitly at the Analysis boundary.
-
-Author: Subhendu Mishra
-"""
+"""Analysis-level orchestration for prepared numerical Power Flow studies."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable, Optional
+from dataclasses import replace
 
 from core.analysis.power_flow_configuration import PowerFlowStudyConfiguration
 from core.analysis.power_flow_preparation import PreparedPowerFlow, PowerFlowPreparation
 from core.solver.power_flow.input import PowerFlowInput
 from core.solver.power_flow.nr_solver import NewtonRaphsonSolver
 from core.solver.power_flow.result import PowerFlowResult
-from core.analysis.power_flow_result_conversion import (
-    EngineeringPowerFlowResult,
-    PowerFlowResultConverter,
-)
+from core.analysis.power_flow_result_conversion import EngineeringPowerFlowResult, PowerFlowResultConverter
 
 
 class PowerFlowAnalysis:
-    """Coordinate preparation, numerical Power Flow execution, and result conversion."""
+    """Coordinate preparation, numerical Power Flow execution, and engineering evaluation."""
 
-    def __init__(
-        self,
-        input_data: PowerFlowInput,
-        ybus,
-        options: Optional[object] = None,
-        *,
-        prepared: PreparedPowerFlow | None = None,
-    ) -> None:
+    def __init__(self, input_data: PowerFlowInput, ybus, options: Optional[object] = None, *, prepared: PreparedPowerFlow | None = None) -> None:
         if not isinstance(input_data, PowerFlowInput):
             raise TypeError("input_data must be PowerFlowInput.")
         if ybus is None:
@@ -59,52 +41,36 @@ class PowerFlowAnalysis:
         self._result: PowerFlowResult | None = None
 
     @classmethod
-    def from_prepared(
-        cls,
-        prepared: PreparedPowerFlow,
-        options: Optional[object] = None,
-    ) -> "PowerFlowAnalysis":
-        """Create analysis directly from one detached prepared snapshot."""
+    def from_prepared(cls, prepared: PreparedPowerFlow, options: Optional[object] = None) -> "PowerFlowAnalysis":
         if not isinstance(prepared, PreparedPowerFlow):
             raise TypeError("prepared must be a PreparedPowerFlow instance.")
         return cls(prepared.input, prepared.ybus, options, prepared=prepared)
 
     @classmethod
-    def from_network(
-        cls,
-        network: Any,
-        power_flow_configuration: PowerFlowStudyConfiguration,
-        options: Optional[object] = None,
-    ) -> "PowerFlowAnalysis":
-        """Prepare a Network once, then construct analysis from its detached snapshot."""
+    def from_network(cls, network: Any, power_flow_configuration: PowerFlowStudyConfiguration, options: Optional[object] = None) -> "PowerFlowAnalysis":
         prepared = PowerFlowPreparation.prepare(network, power_flow_configuration)
         return cls.from_prepared(prepared, options)
 
     def solve(self) -> PowerFlowResult:
-        """Execute the numerical study and retain the numerical PU result."""
-        self._result = self.solver.solve()
+        """Solve numerically, then enrich the same immutable result contract when prepared data is available."""
+        numerical = self.solver.solve()
+        if self.prepared is not None and numerical.success:
+            engineering = PowerFlowResultConverter.to_engineering(numerical, prepared=self.prepared)
+            self._result = engineering.numerical_result
+        else:
+            self._result = numerical
         return self._result
 
-    def to_engineering_result(
-        self,
-        buses: Iterable[Any],
-    ) -> EngineeringPowerFlowResult:
-        """Convert the latest numerical result into structured engineering quantities."""
+    def to_engineering_result(self, buses: Iterable[Any] | None = None) -> EngineeringPowerFlowResult:
         if self._result is None:
             raise RuntimeError("Power Flow must be solved before converting its result.")
-        return PowerFlowResultConverter.to_engineering(
-            self._result,
-            buses,
-        )
+        if self.prepared is None:
+            raise RuntimeError("Power Flow engineering conversion requires the prepared snapshot.")
+        return PowerFlowResultConverter.to_engineering(self._result, buses, prepared=self.prepared)
 
     @property
     def result(self) -> PowerFlowResult | None:
-        """Return the latest numerical result without consulting Core state."""
         return self._result
 
 
-__all__ = [
-    "PowerFlowAnalysis",
-    "EngineeringPowerFlowResult",
-    "PowerFlowResultConverter",
-]
+__all__ = ["PowerFlowAnalysis", "EngineeringPowerFlowResult", "PowerFlowResultConverter"]
