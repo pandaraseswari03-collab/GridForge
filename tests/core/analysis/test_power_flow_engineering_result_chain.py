@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 from core.analysis.contingency import ContingencyAnalysis
+from core.analysis.power_flow import PowerFlowAnalysis
 from core.analysis.power_flow_preparation import PreparedBranch, PreparedPowerFlow, PreparedTransformer
 from core.analysis.power_flow_result_conversion import PowerFlowResultConverter
 from core.analysis.transformer_flow import TransformerFlowCalculator
@@ -99,16 +100,14 @@ def test_engineering_converter_exposes_branch_and_transformer_results():
         transformers=(PreparedTransformer("T1", "B1", "B2", 0.01, 0.08, 0.0, 1.0, 0.0, rated_mva=40.0),),
     )
 
-    engineering = PowerFlowResultConverter.to_engineering(
-        numerical,
-        prepared=prepared,
-    )
+    engineering = PowerFlowResultConverter.to_engineering(numerical, prepared=prepared)
 
     assert "L1" in engineering.branch_results
     assert "T1" in engineering.transformer_results
     assert engineering.branch_results["L1"].limit_mva == 50.0
     assert engineering.transformer_results["T1"].limit_mva == 40.0
     assert engineering.branch_results["L1"].within_limit is True
+    assert engineering.numerical_result.branch_results["L1"]["element_id"] == "L1"
 
 
 def test_power_flow_result_engineering_payload_is_immutable():
@@ -154,31 +153,40 @@ def test_contingency_violations_use_stable_id_engineering_results():
         message="Converged",
         voltage_magnitudes=(1.0, 0.98),
         voltage_angles=(0.0, 0.0),
-        branch_results={
-            "L-42": {
-                "loading_percent": 125.0,
-                "limit_mva": 80.0,
-                "within_limit": False,
-            }
-        },
-        transformer_results={
-            "T-7": {
-                "loading_percent": 110.0,
-                "limit_mva": 100.0,
-                "within_limit": False,
-            }
-        },
+        branch_results={"L-42": {"loading_percent": 125.0, "limit_mva": 80.0, "within_limit": False}},
+        transformer_results={"T-7": {"loading_percent": 110.0, "limit_mva": 100.0, "within_limit": False}},
     )
 
     violations = analysis._detect_violations(
-        _Network(),
-        result,
-        voltage_min=0.95,
-        voltage_max=1.05,
-        thermal_limit=100.0,
+        _Network(), result, voltage_min=0.95, voltage_max=1.05, thermal_limit=100.0
     )
 
     assert [(v.category, v.element_id) for v in violations] == [
         ("thermal", "L-42"),
         ("transformer_thermal", "T-7"),
     ]
+    assert all(v.limit == 100.0 for v in violations)
+    assert all(v.severity > 0.0 for v in violations)
+
+
+def test_power_flow_analysis_keeps_engineering_results_on_same_result_contract(monkeypatch):
+    prepared = _prepared(branches=(PreparedBranch("L1", "B1", "B2", 0.01, 0.1, 0.0, rate_mva=50.0),))
+    numerical = PowerFlowResult(
+        success=True,
+        iterations=1,
+        error=0.0,
+        pv_to_pq=(),
+        history=(0.0,),
+        message="Converged",
+        voltage_magnitudes=(1.0, 0.98),
+        voltage_angles=(0.0, -0.02),
+    )
+    analysis = PowerFlowAnalysis(prepared.input, prepared.ybus, prepared=prepared)
+    monkeypatch.setattr(analysis.solver, "solve", lambda: numerical)
+
+    result = analysis.solve()
+
+    assert result is analysis.result
+    assert result is not numerical
+    assert result.branch_results["L1"]["element_id"] == "L1"
+    assert result.branch_results["L1"]["limit_mva"] == 50.0
