@@ -1,14 +1,12 @@
-"""Power-flow numerical contracts, preparation, and solver components."""
+"""Power-flow numerical contracts and compatibility exports."""
 
 from .input import PowerFlowBusType, PowerFlowInput
 from .nr_solver import NewtonRaphsonSolver
-from .preparation import PowerFlowPreparation, PreparedPowerFlow
 from .q_limit_handler import QLimitHandler
 from .result import PowerFlowResult
 from .runtime_state import PowerFlowRuntimeState
 from .solver_options import SolverOptions
 from .sparse_solver import SparseLinearSolver
-from .study_configuration import PowerFlowStudyConfiguration
 
 __all__ = [
     "PowerFlowBusType",
@@ -23,3 +21,22 @@ __all__ = [
     "SolverOptions",
     "SparseLinearSolver",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily load Analysis-owned compatibility exports.
+
+    PowerFlowStudyConfiguration and PowerFlowPreparation are owned by the
+    Analysis layer. Lazy imports preserve their historical solver-package
+    import paths without creating an Analysis -> solver -> Analysis cycle.
+    """
+    if name == "PowerFlowStudyConfiguration":
+        from .study_configuration import PowerFlowStudyConfiguration
+        return PowerFlowStudyConfiguration
+    if name == "PowerFlowPreparation":
+        from .preparation import PowerFlowPreparation
+        return PowerFlowPreparation
+    if name == "PreparedPowerFlow":
+        from .preparation import PreparedPowerFlow
+        return PreparedPowerFlow
+    raise AttributeError(name)

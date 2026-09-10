@@ -4,10 +4,7 @@
 # Author: Subhendu Mishra
 # ============================================================
 
-"""Prepare detached numerical Power Flow snapshots.
-
-Author: Subhendu Mishra
-"""
+"""Prepare detached numerical Power Flow snapshots."""
 
 from __future__ import annotations
 
@@ -31,7 +28,7 @@ from core.solver.power_flow.input import PowerFlowBusType, PowerFlowInput
 
 @dataclass(frozen=True, slots=True)
 class PreparedBranch:
-    """Detached PU representation of a standard two-terminal branch."""
+    """Detached PU representation plus immutable engineering limits."""
 
     branch_id: str
     from_bus_id: str
@@ -40,6 +37,9 @@ class PreparedBranch:
     x_pu: float
     b_pu: float
     in_service: bool = True
+    rate_mva: float | None = None
+    rated_current_a: float | None = None
+    thermal_limit_mva: float | None = None
 
     def __post_init__(self) -> None:
         if not self.branch_id or not self.from_bus_id or not self.to_bus_id:
@@ -49,14 +49,23 @@ class PreparedBranch:
                 raise ValueError(f"Prepared branch {name} must be finite.")
         if float(self.r_pu) == 0.0 and float(self.x_pu) == 0.0:
             raise ValueError("Prepared branch series impedance cannot be zero.")
+        for value, name in ((self.rate_mva, "rate_mva"), (self.rated_current_a, "rated_current_a"), (self.thermal_limit_mva, "thermal_limit_mva")):
+            if value is not None and (not math.isfinite(float(value)) or float(value) <= 0.0):
+                raise ValueError(f"Prepared branch {name} must be positive and finite when provided.")
         object.__setattr__(self, "r_pu", float(self.r_pu))
         object.__setattr__(self, "x_pu", float(self.x_pu))
         object.__setattr__(self, "b_pu", float(self.b_pu))
+        if self.rate_mva is not None:
+            object.__setattr__(self, "rate_mva", float(self.rate_mva))
+        if self.rated_current_a is not None:
+            object.__setattr__(self, "rated_current_a", float(self.rated_current_a))
+        if self.thermal_limit_mva is not None:
+            object.__setattr__(self, "thermal_limit_mva", float(self.thermal_limit_mva))
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedTransformer:
-    """Detached PU representation of a transformer branch."""
+    """Detached PU representation of a transformer branch and rating."""
 
     branch_id: str
     from_bus_id: str
@@ -67,6 +76,7 @@ class PreparedTransformer:
     tap: float
     shift: float
     in_service: bool = True
+    rated_mva: float | None = None
 
     def __post_init__(self) -> None:
         if not self.branch_id or not self.from_bus_id or not self.to_bus_id:
@@ -78,11 +88,15 @@ class PreparedTransformer:
             raise ValueError("Prepared transformer series impedance cannot be zero.")
         if float(self.tap) <= 0.0:
             raise ValueError("Prepared transformer tap must be positive.")
+        if self.rated_mva is not None and (not math.isfinite(float(self.rated_mva)) or float(self.rated_mva) <= 0.0):
+            raise ValueError("Prepared transformer rated_mva must be positive and finite when provided.")
         object.__setattr__(self, "r_pu", float(self.r_pu))
         object.__setattr__(self, "x_pu", float(self.x_pu))
         object.__setattr__(self, "b_pu", float(self.b_pu))
         object.__setattr__(self, "tap", float(self.tap))
         object.__setattr__(self, "shift", float(self.shift))
+        if self.rated_mva is not None:
+            object.__setattr__(self, "rated_mva", float(self.rated_mva))
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,22 +155,13 @@ class PreparedPowerFlow:
 
     @property
     def bus_ids(self) -> tuple[str, ...]:
-        """Return the detached authoritative numerical bus ordering."""
         return self.input.bus_ids
 
 
 class PowerFlowPreparation:
     """Own the live-model to detached numerical Power Flow boundary."""
 
-    _INJECTION_COLLECTIONS = (
-        "grids",
-        "generators",
-        "synchronous_machines",
-        "loads",
-        "motors",
-        "solar",
-        "batteries",
-    )
+    _INJECTION_COLLECTIONS = ("grids", "generators", "synchronous_machines", "loads", "motors", "solar", "batteries")
 
     @staticmethod
     def prepare(network: Any, power_flow_configuration: PowerFlowStudyConfiguration) -> PreparedPowerFlow:
@@ -177,7 +182,6 @@ class PowerFlowPreparation:
         bus_ids = tuple(str(bus.id) for bus in buses)
         classification = self._prepare_bus_types(bus_ids)
         voltage_bases = self._prepare_voltage_bases(buses)
-
         p_spec: list[float] = []
         q_spec: list[float] = []
         q_min: list[float | None] = []
@@ -195,16 +199,9 @@ class PowerFlowPreparation:
             initial_va.append(math.radians(self._finite(getattr(bus, "angle_deg", 0.0), f"Bus '{bus.id}' angle_deg")))
 
         input_data = PowerFlowInput(
-            bus_ids=bus_ids,
-            bus_types=classification,
-            p_spec=tuple(p_spec),
-            q_spec=tuple(q_spec),
-            q_min=tuple(q_min),
-            q_max=tuple(q_max),
-            initial_vm=tuple(initial_vm),
-            initial_va=tuple(initial_va),
+            bus_ids=bus_ids, bus_types=classification, p_spec=tuple(p_spec), q_spec=tuple(q_spec),
+            q_min=tuple(q_min), q_max=tuple(q_max), initial_vm=tuple(initial_vm), initial_va=tuple(initial_va),
         )
-
         branches = self._prepare_branches(voltage_bases)
         transformers = self._prepare_transformers(voltage_bases)
         shunts = self._prepare_shunts(voltage_bases)
@@ -221,14 +218,9 @@ class PowerFlowPreparation:
         )
         ybus = YBusBuilder().build(snapshot)
         return PreparedPowerFlow(
-            input=input_data,
-            ybus=ybus,
-            base_mva=snapshot.base_mva,
-            bus_voltage_bases=snapshot.bus_voltage_bases,
-            branches=branches,
-            transformers=transformers,
-            shunts=shunts,
-            topology_revision=snapshot.topology_revision,
+            input=input_data, ybus=ybus, base_mva=snapshot.base_mva,
+            bus_voltage_bases=snapshot.bus_voltage_bases, branches=branches,
+            transformers=transformers, shunts=shunts, topology_revision=snapshot.topology_revision,
         )
 
     @staticmethod
@@ -251,7 +243,7 @@ class PowerFlowPreparation:
             kv = self._common_branch_voltage(from_bus, to_bus, voltage_bases, branch)
             z_pu = self._per_unit.to_pu_impedance(branch.series_impedance, kv)
             b_pu = self._per_unit.to_pu_admittance(complex(0.0, branch.shunt_susceptance_siemens), kv).imag
-            prepared.append(PreparedBranch(str(branch.id), str(from_bus.id), str(to_bus.id), z_pu.real, z_pu.imag, b_pu, True))
+            prepared.append(PreparedBranch(str(branch.id), str(from_bus.id), str(to_bus.id), z_pu.real, z_pu.imag, b_pu, True, branch.rate_mva, None, None))
 
         for cable in getattr(self.network, "cables", ()):
             if not getattr(cable, "in_service", True):
@@ -262,7 +254,7 @@ class PowerFlowPreparation:
             kv = self._common_branch_voltage(from_bus, to_bus, voltage_bases, cable)
             z_pu = self._per_unit.to_pu_impedance(complex(cable.resistance_ohm, cable.reactance_ohm), kv)
             b_pu = self._per_unit.to_pu_admittance(complex(0.0, cable.shunt_susceptance_siemens), kv).imag
-            prepared.append(PreparedBranch(str(cable.id), str(from_bus.id), str(to_bus.id), z_pu.real, z_pu.imag, b_pu, True))
+            prepared.append(PreparedBranch(str(cable.id), str(from_bus.id), str(to_bus.id), z_pu.real, z_pu.imag, b_pu, True, None, cable.rated_current_a, cable.thermal_limit_mva))
         return tuple(prepared)
 
     def _prepare_transformers(self, voltage_bases: Mapping[str, float]) -> tuple[PreparedTransformer, ...]:
@@ -276,102 +268,37 @@ class PowerFlowPreparation:
             reference_kv = transformer.impedance_base_voltage_kv
             from_kv = voltage_bases[str(from_bus.id)]
             if not math.isclose(reference_kv, from_kv, rel_tol=0.0, abs_tol=1e-9):
-                raise ValueError(
-                    f"Transformer '{transformer.id}' impedance reference voltage {reference_kv:g} kV "
-                    f"does not match FROM bus voltage base {from_kv:g} kV. "
-                    "Declare engineering/PU impedance on the actual transformer-side voltage base."
-                )
-
+                raise ValueError(f"Transformer '{transformer.id}' impedance reference voltage {reference_kv:g} kV does not match FROM bus voltage base {from_kv:g} kV. Declare engineering/PU impedance on the actual transformer-side voltage base.")
             if transformer.impedance_basis == "pu":
-                z_pu = self._per_unit.convert_impedance_base(
-                    complex(transformer.r, transformer.x),
-                    transformer.impedance_base_mva,
-                    reference_kv,
-                    from_kv,
-                )
-                # Transformer b is an admittance quantity, not an impedance.
-                # Convert it from the declared original PU basis using the
-                # inverse MVA and corresponding voltage-base relationship.
-                b_pu = self._per_unit.convert_admittance_base(
-                    complex(0.0, transformer.b),
-                    transformer.impedance_base_mva,
-                    reference_kv,
-                    from_kv,
-                ).imag
+                z_pu = self._per_unit.convert_impedance_base(complex(transformer.r, transformer.x), transformer.impedance_base_mva, reference_kv, from_kv)
+                b_pu = self._per_unit.convert_admittance_base(complex(0.0, transformer.b), transformer.impedance_base_mva, reference_kv, from_kv).imag
             elif transformer.impedance_basis == "engineering":
-                z_pu = self._per_unit.to_pu_impedance(
-                    complex(transformer.r, transformer.x),
-                    reference_kv,
-                )
-                b_pu = self._per_unit.to_pu_admittance(
-                    complex(0.0, transformer.b),
-                    reference_kv,
-                ).imag
+                z_pu = self._per_unit.to_pu_impedance(complex(transformer.r, transformer.x), reference_kv)
+                b_pu = self._per_unit.to_pu_admittance(complex(0.0, transformer.b), reference_kv).imag
             else:
-                raise ValueError(
-                    f"Transformer '{transformer.id}' has unsupported impedance basis {transformer.impedance_basis!r}."
-                )
-
-            prepared.append(
-                PreparedTransformer(
-                    str(transformer.id),
-                    str(from_bus.id),
-                    str(to_bus.id),
-                    z_pu.real,
-                    z_pu.imag,
-                    b_pu,
-                    transformer.tap,
-                    transformer.shift,
-                    True,
-                )
-            )
+                raise ValueError(f"Transformer '{transformer.id}' has unsupported impedance basis {transformer.impedance_basis!r}.")
+            prepared.append(PreparedTransformer(str(transformer.id), str(from_bus.id), str(to_bus.id), z_pu.real, z_pu.imag, b_pu, transformer.tap, transformer.shift, True, transformer.rated_mva))
         return tuple(prepared)
 
     def _prepare_shunts(self, voltage_bases: Mapping[str, float]) -> tuple[PreparedShunt, ...]:
         prepared: list[PreparedShunt] = []
-
         for shunt in getattr(self.network, "shunts", ()):
             if not getattr(shunt, "in_service", True):
                 continue
             bus = self._resolve_shunt_bus(shunt)
-            prepared.append(
-                PreparedShunt(
-                    str(shunt.id),
-                    str(bus.id),
-                    float(shunt.g_pu),
-                    float(shunt.b_pu),
-                    True,
-                )
-            )
-
-        for equipment in (
-            *getattr(self.network, "capacitors", ()),
-            *getattr(self.network, "reactors", ()),
-        ):
+            prepared.append(PreparedShunt(str(shunt.id), str(bus.id), float(shunt.g_pu), float(shunt.b_pu), True))
+        for equipment in (*getattr(self.network, "capacitors", ()), *getattr(self.network, "reactors", ())):
             if not getattr(equipment, "in_service", True):
                 continue
             if not isinstance(equipment, (Capacitor, Reactor)):
-                raise TypeError(
-                    f"Reactive shunt '{getattr(equipment, 'id', equipment)}' is not a supported Capacitor/Reactor model."
-                )
+                raise TypeError(f"Reactive shunt '{getattr(equipment, 'id', equipment)}' is not a supported Capacitor/Reactor model.")
             bus = self._resolve_shunt_bus(equipment)
             bus_kv = voltage_bases[str(bus.id)]
-            q_mvar = self._finite(
-                equipment.get_power()[1],
-                f"Reactive shunt '{equipment.id}' reactive power",
-            )
+            q_mvar = self._finite(equipment.get_power()[1], f"Reactive shunt '{equipment.id}' reactive power")
             q_pu = self._per_unit.to_pu_power(0.0, q_mvar).imag
             if bus_kv <= 0.0:
                 raise ValueError(f"Reactive shunt '{equipment.id}' has invalid bus voltage base.")
-            prepared.append(
-                PreparedShunt(
-                    str(equipment.id),
-                    str(bus.id),
-                    0.0,
-                    -q_pu,
-                    True,
-                )
-            )
+            prepared.append(PreparedShunt(str(equipment.id), str(bus.id), 0.0, -q_pu, True))
         return tuple(prepared)
 
     @staticmethod
