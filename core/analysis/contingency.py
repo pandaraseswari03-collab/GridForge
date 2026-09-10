@@ -366,10 +366,25 @@ class ContingencyAnalysis:
     ) -> List[ContingencyViolation]:
         violations: List[ContingencyViolation] = []
         voltage = self._extract_result_value(power_flow_result, "voltage_magnitudes")
-        bus_ids = self._extract_result_value(power_flow_result, "bus_ids")
-        if voltage is not None:
+        bus_results = self._extract_result_value(power_flow_result, "bus_results")
+        if bus_results:
+            for bus_id, record in bus_results.items():
+                value = record.get("voltage_magnitude")
+                if value is None:
+                    value = record.get("voltage_pu")
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not isfinite(numeric_value):
+                    continue
+                if numeric_value < voltage_min:
+                    violations.append(ContingencyViolation("voltage_low", bus_id, numeric_value, voltage_min, voltage_min - numeric_value))
+                elif numeric_value > voltage_max:
+                    violations.append(ContingencyViolation("voltage_high", bus_id, numeric_value, voltage_max, numeric_value - voltage_max))
+        elif voltage is not None:
             buses = {str(bus.id): bus for bus in network.buses}
-            ids = tuple(bus_ids) if bus_ids is not None else tuple(str(bus.id) for bus in network.buses)
+            ids = tuple(str(bus.id) for bus in network.buses)
             for index, value in enumerate(voltage):
                 if index >= len(ids):
                     break
@@ -379,7 +394,7 @@ class ContingencyAnalysis:
                     continue
                 if not isfinite(numeric_value):
                     continue
-                bus_id = str(ids[index])
+                bus_id = ids[index]
                 if numeric_value < voltage_min:
                     violations.append(ContingencyViolation("voltage_low", buses.get(bus_id, bus_id).id if bus_id in buses else bus_id, numeric_value, voltage_min, voltage_min - numeric_value))
                 elif numeric_value > voltage_max:
@@ -411,9 +426,15 @@ class ContingencyAnalysis:
             within_limit = record.get("within_limit")
             violated = within_limit is False or (within_limit is None and value > limit_percent)
             if violated:
-                limit = record.get("limit_mva")
-                severity = value - limit_percent
-                violations.append(ContingencyViolation(category, element_id, value, limit, severity))
+                violations.append(
+                    ContingencyViolation(
+                        category=category,
+                        element_id=element_id,
+                        value=value,
+                        limit=limit_percent,
+                        severity=value - limit_percent,
+                    )
+                )
         return violations
 
     @staticmethod
@@ -465,45 +486,6 @@ class ContingencyAnalysis:
     @property
     def result(self) -> Optional[ContingencyResult]:
         return self._result
-
-
-# Keep the violation contract unit-consistent: ``value``, ``limit`` and
-# ``severity`` are percentages. The equipment's MVA limit remains available
-# in PowerFlowResult.branch_results / transformer_results.
-def _detect_engineering_loading_violations_unit_consistent(
-    results: Any,
-    category: str,
-    default_limit: float,
-) -> List[ContingencyViolation]:
-    violations: List[ContingencyViolation] = []
-    for element_id, record in results.items():
-        loading = record.get("loading_percent")
-        if loading is None:
-            continue
-        try:
-            value = float(loading)
-        except (TypeError, ValueError):
-            continue
-        if not isfinite(value):
-            continue
-        limit_percent = 100.0 if record.get("limit_mva") is not None else float(default_limit)
-        within_limit = record.get("within_limit")
-        if within_limit is False or (within_limit is None and value > limit_percent):
-            violations.append(
-                ContingencyViolation(
-                    category=category,
-                    element_id=element_id,
-                    value=value,
-                    limit=limit_percent,
-                    severity=value - limit_percent,
-                )
-            )
-    return violations
-
-
-ContingencyAnalysis._detect_engineering_loading_violations = staticmethod(
-    _detect_engineering_loading_violations_unit_consistent
-)
 
 
 __all__ = ["ContingencyAnalysis", "ContingencyResult", "ContingencyCaseResult", "ContingencyViolation"]
