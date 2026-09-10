@@ -1,14 +1,4 @@
-"""
-GridForge Transformer Flow Analysis
-===================================
-
-File: core/analysis/transformer_flow.py
-Author: Subhendu Mishra
-
-Transformer terminal-flow calculations consume detached
-PreparedTransformer data. Transformer r/x/b are never read directly
-from the live model by this numerical calculator.
-"""
+"""Transformer terminal-flow evaluation from detached Power Flow data."""
 
 from __future__ import annotations
 
@@ -20,9 +10,9 @@ import numpy as np
 from core.analysis.power_flow_preparation import PreparedPowerFlow, PreparedTransformer
 
 
-@dataclass
+@dataclass(frozen=True)
 class TransformerFlowResult:
-    """Result of a single transformer-flow calculation."""
+    """Immutable result of one transformer terminal-flow calculation."""
 
     transformer_id: Any
     from_bus: Any
@@ -59,16 +49,13 @@ class TransformerFlowResult:
 
 
 class TransformerFlowCalculator:
-    """Calculate transformer flows from a detached PreparedPowerFlow snapshot."""
+    """Calculate transformer flows from one detached PreparedPowerFlow."""
 
     _IMPEDANCE_TOLERANCE = 1.0e-12
 
     def __init__(self, network: Any = None, prepared: PreparedPowerFlow | None = None) -> None:
         if prepared is None:
-            raise ValueError(
-                "TransformerFlowCalculator requires a PreparedPowerFlow snapshot; "
-                "live transformer impedance is not a numerical source."
-            )
+            raise ValueError("TransformerFlowCalculator requires a PreparedPowerFlow snapshot; live transformer impedance is not a numerical source.")
         if not isinstance(prepared, PreparedPowerFlow):
             raise TypeError("prepared must be a PreparedPowerFlow instance.")
         self.network = network
@@ -80,12 +67,7 @@ class TransformerFlowCalculator:
     def from_prepared(cls, prepared: PreparedPowerFlow, network: Any = None) -> "TransformerFlowCalculator":
         return cls(network=network, prepared=prepared)
 
-    def calculate(
-        self,
-        Vm: np.ndarray,
-        Va: np.ndarray,
-        include_out_of_service: bool = False,
-    ) -> Dict[Any, TransformerFlowResult]:
+    def calculate(self, Vm: np.ndarray, Va: np.ndarray, include_out_of_service: bool = False) -> Dict[Any, TransformerFlowResult]:
         Vm, Va = self._validate_voltage_arrays(Vm, Va)
         results: Dict[Any, TransformerFlowResult] = {}
         for transformer in self.prepared.transformers:
@@ -96,28 +78,16 @@ class TransformerFlowCalculator:
             results[transformer.branch_id] = self.calculate_prepared(transformer, Vm, Va)
         return results
 
-    def calculate_one(
-        self,
-        transformer: Any,
-        Vm: np.ndarray,
-        Va: np.ndarray,
-    ) -> TransformerFlowResult:
+    def calculate_one(self, transformer: Any, Vm: np.ndarray, Va: np.ndarray) -> TransformerFlowResult:
         Vm, Va = self._validate_voltage_arrays(Vm, Va)
         transformer_id = getattr(transformer, "id", transformer)
         try:
             prepared = self._transformers[str(transformer_id)]
         except KeyError as exc:
-            raise ValueError(
-                f"Transformer '{transformer_id}' is absent from PreparedPowerFlow."
-            ) from exc
+            raise ValueError(f"Transformer '{transformer_id}' is absent from PreparedPowerFlow.") from exc
         return self.calculate_prepared(prepared, Vm, Va)
 
-    def calculate_prepared(
-        self,
-        transformer: PreparedTransformer,
-        Vm: np.ndarray,
-        Va: np.ndarray,
-    ) -> TransformerFlowResult:
+    def calculate_prepared(self, transformer: PreparedTransformer, Vm: np.ndarray, Va: np.ndarray) -> TransformerFlowResult:
         if not isinstance(transformer, PreparedTransformer):
             raise TypeError("transformer must be a PreparedTransformer instance.")
         if not transformer.in_service:
@@ -127,9 +97,7 @@ class TransformerFlowCalculator:
             i = self._bus_index[transformer.from_bus_id]
             j = self._bus_index[transformer.to_bus_id]
         except KeyError as exc:
-            raise ValueError(
-                f"Prepared transformer '{transformer.branch_id}' references an unknown bus."
-            ) from exc
+            raise ValueError(f"Prepared transformer '{transformer.branch_id}' references an unknown bus.") from exc
 
         V_from = Vm[i] * np.exp(1j * Va[i])
         V_to = Vm[j] * np.exp(1j * Va[j])
@@ -141,12 +109,14 @@ class TransformerFlowCalculator:
         if abs(a) <= self._IMPEDANCE_TOLERANCE:
             raise ValueError(f"Transformer '{transformer.branch_id}' has a zero tap ratio.")
 
-        I_from = y / np.conj(a) * (V_from / a - V_to)
-        I_to = y * (V_to - V_from / a)
+        # Exactly match YBusBuilder._stamp_transformer():
+        # Yff=y/|a|²+jB/2, Yft=-y/conj(a),
+        # Ytf=-y/a, Ytt=y+jB/2.
+        ysh = 1j * transformer.b_pu / 2.0
+        I_from = (y / abs(a) ** 2 + ysh) * V_from - (y / np.conj(a)) * V_to
+        I_to = -(y / a) * V_from + (y + ysh) * V_to
         S_from = V_from * np.conj(I_from)
         S_to = V_to * np.conj(I_to)
-        s_from_mag = float(abs(S_from))
-        s_to_mag = float(abs(S_to))
 
         return TransformerFlowResult(
             transformer_id=transformer.branch_id,
@@ -160,8 +130,8 @@ class TransformerFlowCalculator:
             q_to=float(S_to.imag),
             p_loss=float((S_from + S_to).real),
             q_loss=float((S_from + S_to).imag),
-            s_from_pu=s_from_mag,
-            s_to_pu=s_to_mag,
+            s_from_pu=float(abs(S_from)),
+            s_to_pu=float(abs(S_to)),
             i_from_pu=float(abs(I_from)),
             i_to_pu=float(abs(I_to)),
             loading_mva=None,
@@ -174,10 +144,7 @@ class TransformerFlowCalculator:
         Va = np.asarray(Va, dtype=float).reshape(-1)
         expected = len(self.prepared.bus_ids)
         if len(Vm) != expected or len(Va) != expected:
-            raise ValueError(
-                "Voltage arrays must match prepared bus count: "
-                f"expected {expected}, received Vm={len(Vm)}, Va={len(Va)}."
-            )
+            raise ValueError(f"Voltage arrays must match prepared bus count: expected {expected}, received Vm={len(Vm)}, Va={len(Va)}.")
         if not np.all(np.isfinite(Vm)) or not np.all(np.isfinite(Va)):
             raise ValueError("Voltage arrays contain NaN or infinite values.")
         return Vm, Va
