@@ -25,7 +25,11 @@ jobs:
           core/analysis/power_flow_result_conversion.py
           core/analysis/transformer_flow.py
           core/solver/power_flow/result.py
+          core/solver/power_flow/__init__.py
           tests/core/analysis/test_power_flow_engineering_result_chain.py
+          tests/core/solver/test_power_flow_result_contract.py
+      - name: Run isolated authoritative-result tests
+        run: python -m pytest -q tests/core/solver/test_power_flow_result_contract.py
       - name: Run GF-AUD-007 focused tests
         run: python -m pytest -q tests/core/analysis/test_power_flow_engineering_result_chain.py
       - name: Run existing targeted regression tests
