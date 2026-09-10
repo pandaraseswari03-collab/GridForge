@@ -83,33 +83,9 @@ from core.solver.power_flow.preparation import PowerFlowPreparation
 from core.solver.power_flow.study_configuration import PowerFlowStudyConfiguration
 
 
-# =====================================================================
-# RESULT TYPES
-# =====================================================================
-
-
 @dataclass
 class ContingencyViolation:
-    """
-    Single post-contingency engineering violation.
-
-    Parameters
-    ----------
-    category:
-        Violation category.
-
-    element_id:
-        ID of the affected bus or network element.
-
-    value:
-        Calculated engineering value.
-
-    limit:
-        Applicable engineering limit.
-
-    severity:
-        Positive violation magnitude.
-    """
+    """Single post-contingency engineering violation."""
 
     category: str
     element_id: Any
@@ -120,97 +96,38 @@ class ContingencyViolation:
 
 @dataclass
 class ContingencyCaseResult:
-    """
-    Result for one contingency case.
-    """
+    """Result for one contingency case."""
 
     case_id: str
     outages: Tuple[Any, ...]
-
     success: bool = False
     converged: bool = False
-
     power_flow_result: Any = None
-
-    violations: List[ContingencyViolation] = field(
-        default_factory=list
-    )
-
+    violations: List[ContingencyViolation] = field(default_factory=list)
     error: Optional[str] = None
 
 
 @dataclass
 class ContingencyResult:
-    """
-    Complete contingency-study result.
-    """
+    """Complete contingency-study result."""
 
-    cases: List[ContingencyCaseResult] = field(
-        default_factory=list
-    )
-
+    cases: List[ContingencyCaseResult] = field(default_factory=list)
     success: bool = False
     converged: bool = False
-
-    critical_cases: List[str] = field(
-        default_factory=list
-    )
-
-    critical_violations: List[ContingencyViolation] = field(
-        default_factory=list
-    )
+    critical_cases: List[str] = field(default_factory=list)
+    critical_violations: List[ContingencyViolation] = field(default_factory=list)
 
     @property
     def failed_cases(self) -> List[ContingencyCaseResult]:
-        """Return cases for which execution failed."""
-
-        return [
-            case
-            for case in self.cases
-            if not case.success
-        ]
+        return [case for case in self.cases if not case.success]
 
     @property
     def violated_cases(self) -> List[ContingencyCaseResult]:
-        """Return successfully executed cases containing violations."""
-
-        return [
-            case
-            for case in self.cases
-            if case.success and case.violations
-        ]
-
-
-# =====================================================================
-# CONTINGENCY ANALYSIS
-# =====================================================================
+        return [case for case in self.cases if case.success and case.violations]
 
 
 class ContingencyAnalysis:
-    """
-    Public facade for N-1 / N-k contingency studies.
-
-    Parameters
-    ----------
-    network:
-        Authoritative GridForge Network.
-
-    power_flow_configuration:
-        Optional reusable study-level power-flow configuration. A
-        configuration is required when ``run()`` executes power flow.
-        The same instance is reused for every isolated contingency case.
-
-    Notes
-    -----
-    The supplied Network is never modified by this analysis.
-
-    Every contingency case receives its own isolated deep-copied
-    Network before outage state is applied.
-    """
-
-    # =================================================================
-    # INITIALIZATION
-    # =================================================================
+    """Public facade for N-1 / N-k contingency studies."""
 
     def __init__(
         self,
@@ -219,23 +136,11 @@ class ContingencyAnalysis:
     ) -> None:
         self.network = network
         self.power_flow_configuration = power_flow_configuration
-
         self._validate_network()
-
-        if power_flow_configuration is not None and not isinstance(
-            power_flow_configuration,
-            PowerFlowStudyConfiguration,
-        ):
-            raise TypeError(
-                "power_flow_configuration must be PowerFlowStudyConfiguration."
-            )
-
+        if power_flow_configuration is not None and not isinstance(power_flow_configuration, PowerFlowStudyConfiguration):
+            raise TypeError("power_flow_configuration must be PowerFlowStudyConfiguration.")
         self._prepared_cases: List[Tuple[Any, ...]] = []
         self._result: Optional[ContingencyResult] = None
-
-    # =================================================================
-    # PUBLIC API
-    # =================================================================
 
     def run(
         self,
@@ -248,93 +153,23 @@ class ContingencyAnalysis:
         voltage_max: float = 1.05,
         thermal_limit: float = 100.0,
     ) -> ContingencyResult:
-        """
-        Execute a contingency study.
-
-        Parameters
-        ----------
-        elements:
-            Optional sequence of contingency element IDs.
-
-            If omitted, all in-service supported contingency elements
-            are considered.
-
-        contingency_type:
-            "N-1" or "N-k".
-
-        element_types:
-            Optional element-type filter.
-
-            Supported:
-                "bus"
-                "line"
-                "transformer"
-                "generator"
-                "load"
-                "shunt"
-
-        power_flow_options:
-            SolverOptions passed to PowerFlowAnalysis.
-
-        voltage_min:
-            Minimum acceptable bus voltage in pu.
-
-        voltage_max:
-            Maximum acceptable bus voltage in pu.
-
-        thermal_limit:
-            Default thermal loading limit in percent.
-
-        Returns
-        -------
-        ContingencyResult
-            Complete contingency-study result.
-
-        State Safety
-        ------------
-        The authoritative Network is never modified.
-        """
-
-        self._validate_limits(
-            voltage_min=voltage_min,
-            voltage_max=voltage_max,
-            thermal_limit=thermal_limit,
-        )
-
+        self._validate_limits(voltage_min=voltage_min, voltage_max=voltage_max, thermal_limit=thermal_limit)
         if self.power_flow_configuration is None:
-            raise ValueError(
-                "ContingencyAnalysis requires a PowerFlowStudyConfiguration "
-                "to execute power-flow based contingency cases."
+            raise ValueError("ContingencyAnalysis requires a PowerFlowStudyConfiguration to execute power-flow based contingency cases.")
+        cases = self.prepare(elements=elements, contingency_type=contingency_type, element_types=element_types)
+        case_results = [
+            self._run_case(
+                outages=outages,
+                power_flow_options=power_flow_options,
+                voltage_min=voltage_min,
+                voltage_max=voltage_max,
+                thermal_limit=thermal_limit,
             )
-
-        cases = self.prepare(
-            elements=elements,
-            contingency_type=contingency_type,
-            element_types=element_types,
-        )
-
-        case_results: List[ContingencyCaseResult] = []
-
-        for outages in cases:
-            case_results.append(
-                self._run_case(
-                    outages=outages,
-                    power_flow_options=power_flow_options,
-                    voltage_min=voltage_min,
-                    voltage_max=voltage_max,
-                    thermal_limit=thermal_limit,
-                )
-            )
-
+            for outages in cases
+        ]
         result = self.post_process(case_results)
-
         self._result = result
-
         return result
-
-    # =================================================================
-    # PREPARATION
-    # =================================================================
 
     def prepare(
         self,
@@ -343,45 +178,13 @@ class ContingencyAnalysis:
         contingency_type: str = "N-1",
         element_types: Optional[Sequence[str]] = None,
     ) -> List[Tuple[Any, ...]]:
-        """
-        Prepare contingency cases.
-
-        N-1:
-            One outage per selected element.
-
-        N-k:
-            All k-element combinations of selected elements.
-
-        The authoritative Network is never modified.
-        """
-
-        k = self._parse_contingency_order(
-            contingency_type
-        )
-
-        candidates = self._get_candidates(
-            elements=elements,
-            element_types=element_types,
-        )
-
+        k = self._parse_contingency_order(contingency_type)
+        candidates = self._get_candidates(elements=elements, element_types=element_types)
         if len(candidates) < k:
-            raise ValueError(
-                f"N-{k} contingency analysis requires at least "
-                f"{k} candidate elements; "
-                f"only {len(candidates)} are available."
-            )
-
-        cases = list(
-            combinations(candidates, k)
-        )
-
+            raise ValueError(f"N-{k} contingency analysis requires at least {k} candidate elements; only {len(candidates)} are available.")
+        cases = list(combinations(candidates, k))
         self._prepared_cases = cases
-
         return cases
-
-    # =================================================================
-    # CASE EXECUTION
-    # =================================================================
 
     def _run_case(
         self,
@@ -392,205 +195,83 @@ class ContingencyAnalysis:
         voltage_max: float,
         thermal_limit: float,
     ) -> ContingencyCaseResult:
-        """
-        Execute one isolated contingency case.
-
-        The authoritative Network is never used for case mutation.
-        """
-
-        case_result = ContingencyCaseResult(
-            case_id=self._make_case_id(outages),
-            outages=outages,
-        )
-
+        case_result = ContingencyCaseResult(case_id=self._make_case_id(outages), outages=outages)
         try:
-            # ---------------------------------------------------------
-            # CRITICAL ARCHITECTURAL BOUNDARY
-            # ---------------------------------------------------------
-            #
-            # _create_outage_case() MUST return an independent copy.
-            # Everything below operates exclusively on that copy.
-            # ---------------------------------------------------------
-
-            case_network = self._create_outage_case(
-                outages
-            )
-
-            prepared = PowerFlowPreparation(
-                case_network,
-                self.power_flow_configuration,
-            ).prepare()
-
+            case_network = self._create_outage_case(outages)
+            prepared = PowerFlowPreparation(case_network, self.power_flow_configuration).prepare()
             power_flow = PowerFlowAnalysis(
                 prepared.input,
                 prepared.ybus,
                 options=power_flow_options,
+                prepared=prepared,
             )
-
             power_flow_result = power_flow.solve()
-
-            case_result.power_flow_result = (
-                power_flow_result
-            )
-
-            case_result.converged = (
-                self._result_converged(
-                    power_flow_result
-                )
-            )
-
+            case_result.power_flow_result = power_flow_result
+            case_result.converged = self._result_converged(power_flow_result)
             case_result.success = True
-
-            case_result.violations = (
-                self._detect_violations(
-                    case_network,
-                    power_flow_result,
-                    voltage_min=voltage_min,
-                    voltage_max=voltage_max,
-                    thermal_limit=thermal_limit,
-                )
+            case_result.violations = self._detect_violations(
+                case_network,
+                power_flow_result,
+                voltage_min=voltage_min,
+                voltage_max=voltage_max,
+                thermal_limit=thermal_limit,
             )
-
         except Exception as exc:
             case_result.success = False
             case_result.converged = False
-            case_result.error = (
-                f"{type(exc).__name__}: {exc}"
-            )
-
+            case_result.error = f"{type(exc).__name__}: {exc}"
         return case_result
 
-    # =================================================================
-    # NON-DESTRUCTIVE OUTAGE CREATION
-    # =====================================================================
-
-    def _create_outage_case(
-        self,
-        outages: Tuple[Any, ...],
-    ) -> Any:
-        """
-        Create a completely isolated Network for one contingency.
-
-        IMPORTANT
-        ---------
-        The authoritative Network is deep-copied BEFORE any outage
-        state is changed.
-
-        No mutation is ever performed on self.network.
-        """
-
-        case_network = copy.deepcopy(
-            self.network
-        )
-
+    def _create_outage_case(self, outages: Tuple[Any, ...]) -> Any:
+        case_network = copy.deepcopy(self.network)
         for element_id in outages:
-            element = self._find_element(
-                case_network,
-                element_id,
-            )
-
+            element = self._find_element(case_network, element_id)
             if element is None:
-                raise KeyError(
-                    f"Contingency element "
-                    f"{element_id!r} was not found "
-                    "in the isolated case Network."
-                )
-
+                raise KeyError(f"Contingency element {element_id!r} was not found in the isolated case Network.")
             if self._is_bus(element):
                 element.in_service = False
-                self._disable_connected_equipment(
-                    case_network,
-                    element,
-                )
+                self._disable_connected_equipment(case_network, element)
             else:
                 self._set_in_service(element, False)
-
         return case_network
 
     @staticmethod
     def _is_bus(element: Any) -> bool:
-        """Return True when the element is a Bus model."""
-
         return type(element).__name__.lower() == "bus"
 
     @staticmethod
     def _set_in_service(element: Any, in_service: bool) -> None:
-        """Set equipment operational state through its model contract."""
-
         if not hasattr(element, "in_service"):
-            raise TypeError(
-                f"Contingency element {element!r} has no in_service state."
-            )
-
+            raise TypeError(f"Contingency element {element!r} has no in_service state.")
         element.in_service = bool(in_service)
 
     @classmethod
-    def _disable_connected_equipment(
-        cls,
-        network: Any,
-        bus: Any,
-    ) -> None:
-        """
-        Disable supported equipment whose authoritative Terminal endpoint
-        refers to the selected Bus.
-        """
-
-        supported_collections = (
-            network.lines,
-            network.transformers,
-            network.generators,
-            network.loads,
-            network.shunts,
-        )
-
-        for collection in supported_collections:
+    def _disable_connected_equipment(cls, network: Any, bus: Any) -> None:
+        for collection in (network.lines, network.transformers, network.generators, network.loads, network.shunts):
             for element in collection:
                 if cls._element_connected_to_bus(element, bus):
                     cls._set_in_service(element, False)
 
     @staticmethod
-    def _element_connected_to_bus(
-        element: Any,
-        bus: Any,
-    ) -> bool:
-        """
-        Determine Bus connectivity through the canonical Network
-        Terminal-to-Bus resolver.
-
-        The resolver supports both direct Bus endpoints and endpoint
-        adapters exposing ``.bus``. No duplicate endpoint interpretation
-        is performed in the contingency layer.
-        """
-
+    def _element_connected_to_bus(element: Any, bus: Any) -> bool:
         terminals = getattr(element, "terminals", None)
-
         if terminals is None:
             terminal = getattr(element, "terminal", None)
             terminals = (terminal,) if terminal is not None else ()
-
         for terminal in terminals:
             if terminal is None:
                 continue
-
             try:
                 resolved_bus = resolve_terminal_bus(terminal)
             except (TypeError, ValueError):
                 continue
-
             if resolved_bus is bus:
                 return True
-
             resolved_bus_id = getattr(resolved_bus, "id", None)
             bus_id = getattr(bus, "id", None)
-
             if resolved_bus_id is not None and resolved_bus_id == bus_id:
                 return True
-
         return False
-
-    # =================================================================
-    # CANDIDATE DISCOVERY
-    # =================================================================
 
     def _get_candidates(
         self,
@@ -598,27 +279,8 @@ class ContingencyAnalysis:
         elements: Optional[Sequence[Any]],
         element_types: Optional[Sequence[str]],
     ) -> List[Any]:
-        """
-        Return valid contingency candidate IDs.
-
-        Supported:
-
-            - Bus
-            - Line
-            - Transformer
-            - Generator
-            - Load
-            - Shunt
-
-        Only currently in-service elements are candidates.
-        """
-
-        normalized_types = self._normalize_element_types(
-            element_types
-        )
-
+        normalized_types = self._normalize_element_types(element_types)
         available: List[Any] = []
-
         collections = (
             ("bus", self.network.buses),
             ("line", self.network.lines),
@@ -627,215 +289,71 @@ class ContingencyAnalysis:
             ("load", self.network.loads),
             ("shunt", self.network.shunts),
         )
-
         for element_type, collection in collections:
             if normalized_types is not None and element_type not in normalized_types:
                 continue
-
             for element in collection:
                 if getattr(element, "in_service", True):
                     available.append(element.id)
-
-        # -------------------------------------------------------------
-        # No explicit selection:
-        # use every valid in-service candidate.
-        # -------------------------------------------------------------
-
         if elements is None:
             return available
-
         requested = list(elements)
-
         try:
             unique_requested = set(requested)
         except TypeError as exc:
-            raise ValueError(
-                "Contingency element IDs must be hashable."
-            ) from exc
-
+            raise ValueError("Contingency element IDs must be hashable.") from exc
         if len(requested) != len(unique_requested):
-            raise ValueError(
-                "Duplicate contingency element IDs "
-                "are not permitted."
-            )
-
-        missing = [
-            element_id
-            for element_id in requested
-            if element_id not in available
-        ]
-
+            raise ValueError("Duplicate contingency element IDs are not permitted.")
+        missing = [element_id for element_id in requested if element_id not in available]
         if missing:
-            raise KeyError(
-                "Unknown or out-of-service contingency "
-                f"element(s): {missing}"
-            )
-
+            raise KeyError(f"Unknown or out-of-service contingency element(s): {missing}")
         return requested
 
-    # =================================================================
-    # ELEMENT-TYPE NORMALIZATION
-    # =================================================================
-
     @staticmethod
-    def _normalize_element_types(
-        element_types: Optional[Sequence[str]],
-    ) -> Optional[set[str]]:
-        """
-        Normalize and validate contingency element types.
-        """
-
+    def _normalize_element_types(element_types: Optional[Sequence[str]]) -> Optional[set[str]]:
         if element_types is None:
             return None
-
-        normalized = {
-            str(item).strip().lower()
-            for item in element_types
-        }
-
-        valid_types = {
-            "bus",
-            "line",
-            "transformer",
-            "generator",
-            "load",
-            "shunt",
-        }
-
+        normalized = {str(item).strip().lower() for item in element_types}
+        valid_types = {"bus", "line", "transformer", "generator", "load", "shunt"}
         invalid = normalized - valid_types
-
         if invalid:
-            raise ValueError(
-                "Unsupported contingency element type(s): "
-                f"{sorted(invalid)}"
-            )
-
+            raise ValueError(f"Unsupported contingency element type(s): {sorted(invalid)}")
         if not normalized:
-            raise ValueError(
-                "element_types cannot be empty."
-            )
-
+            raise ValueError("element_types cannot be empty.")
         return normalized
 
-    # =================================================================
-    # CONTINGENCY ORDER
-    # =================================================================
-
     @staticmethod
-    def _parse_contingency_order(
-        contingency_type: str,
-    ) -> int:
-        """
-        Parse:
-
-            N-1
-            N-2
-            N-3
-            ...
-
-        """
-
-        normalized = (
-            str(contingency_type)
-            .strip()
-            .upper()
-            .replace(" ", "")
-        )
-
+    def _parse_contingency_order(contingency_type: str) -> int:
+        normalized = str(contingency_type).strip().upper().replace(" ", "")
         if not normalized.startswith("N-"):
-            raise ValueError(
-                "Unsupported contingency type. "
-                "Use 'N-1' or 'N-k', for example 'N-2'."
-            )
-
+            raise ValueError("Unsupported contingency type. Use 'N-1' or 'N-k', for example 'N-2'.")
         try:
             k = int(normalized[2:])
         except ValueError as exc:
-            raise ValueError(
-                f"Invalid contingency type: "
-                f"{contingency_type!r}."
-            ) from exc
-
+            raise ValueError(f"Invalid contingency type: {contingency_type!r}.") from exc
         if k < 1:
-            raise ValueError(
-                "Contingency order must be at least 1."
-            )
-
+            raise ValueError("Contingency order must be at least 1.")
         return k
 
-    # =================================================================
-    # ELEMENT LOOKUP
-    # =================================================================
-
     @staticmethod
-    def _find_element(
-        network: Any,
-        element_id: Any,
-    ) -> Optional[Any]:
-        """
-        Locate a supported contingency element by ID.
-        """
-
-        collections = (
-            network.buses,
-            network.lines,
-            network.transformers,
-            network.generators,
-            network.loads,
-            network.shunts,
-        )
-
-        for collection in collections:
+    def _find_element(network: Any, element_id: Any) -> Optional[Any]:
+        for collection in (network.buses, network.lines, network.transformers, network.generators, network.loads, network.shunts):
             for element in collection:
                 if element.id == element_id:
                     return element
-
         return None
 
-    # =================================================================
-    # POST-PROCESSING
-    # =================================================================
-
-    def post_process(
-        self,
-        cases: Iterable[ContingencyCaseResult],
-    ) -> ContingencyResult:
-        """
-        Aggregate individual contingency cases.
-        """
-
-        result = ContingencyResult(
-            cases=list(cases)
-        )
-
+    def post_process(self, cases: Iterable[ContingencyCaseResult]) -> ContingencyResult:
+        result = ContingencyResult(cases=list(cases))
         if not result.cases:
             return result
-
-        result.success = all(
-            case.success
-            for case in result.cases
-        )
-
-        result.converged = all(
-            case.success and case.converged
-            for case in result.cases
-        )
-
+        result.success = all(case.success for case in result.cases)
+        result.converged = all(case.success and case.converged for case in result.cases)
         for case in result.cases:
             if case.violations:
-                result.critical_cases.append(
-                    case.case_id
-                )
-
-                result.critical_violations.extend(
-                    case.violations
-                )
-
+                result.critical_cases.append(case.case_id)
+                result.critical_violations.extend(case.violations)
         return result
-
-    # =================================================================
-    # VIOLATION DETECTION
-    # =================================================================
 
     def _detect_violations(
         self,
@@ -846,464 +364,107 @@ class ContingencyAnalysis:
         voltage_max: float,
         thermal_limit: float,
     ) -> List[ContingencyViolation]:
-        """
-        Detect post-contingency engineering violations.
-
-        No power-flow numerical calculations are performed here.
-        """
-
         violations: List[ContingencyViolation] = []
-
-        # -------------------------------------------------------------
-        # BUS VOLTAGE
-        # -------------------------------------------------------------
-
-        voltage = self._extract_result_value(
-            power_flow_result,
-            "bus_voltage",
-        )
-
+        voltage = self._extract_result_value(power_flow_result, "voltage_magnitudes")
+        bus_ids = self._extract_result_value(power_flow_result, "bus_ids")
         if voltage is not None:
-            violations.extend(
-                self._detect_voltage_violations(
-                    network,
-                    voltage,
-                    voltage_min,
-                    voltage_max,
-                )
-            )
+            buses = {str(bus.id): bus for bus in network.buses}
+            ids = tuple(bus_ids) if bus_ids is not None else tuple(str(bus.id) for bus in network.buses)
+            for index, value in enumerate(voltage):
+                if index >= len(ids):
+                    break
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not isfinite(numeric_value):
+                    continue
+                bus_id = str(ids[index])
+                if numeric_value < voltage_min:
+                    violations.append(ContingencyViolation("voltage_low", buses.get(bus_id, bus_id).id if bus_id in buses else bus_id, numeric_value, voltage_min, voltage_min - numeric_value))
+                elif numeric_value > voltage_max:
+                    violations.append(ContingencyViolation("voltage_high", buses.get(bus_id, bus_id).id if bus_id in buses else bus_id, numeric_value, voltage_max, numeric_value - voltage_max))
 
-        # -------------------------------------------------------------
-        # LINE LOADING
-        # -------------------------------------------------------------
+        branch_results = self._extract_result_value(power_flow_result, "branch_results")
+        if branch_results is not None:
+            violations.extend(self._detect_engineering_loading_violations(branch_results, "thermal", thermal_limit))
 
-        line_loading = self._extract_result_value(
-            power_flow_result,
-            "line_loading",
-        )
-
-        if line_loading is not None:
-            violations.extend(
-                self._detect_loading_violations(
-                    network,
-                    line_loading,
-                    thermal_limit,
-                )
-            )
-
-        # -------------------------------------------------------------
-        # TRANSFORMER LOADING
-        # -------------------------------------------------------------
-
-        transformer_loading = (
-            self._extract_result_value(
-                power_flow_result,
-                "transformer_loading",
-            )
-        )
-
-        if transformer_loading is not None:
-            violations.extend(
-                self._detect_transformer_loading_violations(
-                    network,
-                    transformer_loading,
-                    thermal_limit,
-                )
-            )
-
+        transformer_results = self._extract_result_value(power_flow_result, "transformer_results")
+        if transformer_results is not None:
+            violations.extend(self._detect_engineering_loading_violations(transformer_results, "transformer_thermal", thermal_limit))
         return violations
 
-    # =================================================================
-    # VOLTAGE VIOLATIONS
-    # =================================================================
-
     @staticmethod
-    def _detect_voltage_violations(
-        network: Any,
-        voltage: Any,
-        voltage_min: float,
-        voltage_max: float,
-    ) -> List[ContingencyViolation]:
-        """
-        Detect bus-voltage magnitude violations.
-
-        Voltage values are expected in per-unit and in the same
-        stable bus ordering used by the Power Flow result.
-        """
-
+    def _detect_engineering_loading_violations(results: Any, category: str, default_limit: float) -> List[ContingencyViolation]:
         violations: List[ContingencyViolation] = []
-
-        try:
-            values = list(voltage)
-        except TypeError:
-            return violations
-
-        buses = list(network.buses)
-
-        for index, value in enumerate(values):
-
-            if index >= len(buses):
-                break
-
-            bus = buses[index]
-
+        for element_id, record in results.items():
+            loading = record.get("loading_percent")
+            if loading is None:
+                continue
             try:
-                numeric_value = float(value)
+                value = float(loading)
             except (TypeError, ValueError):
                 continue
-
-            if not isfinite(numeric_value):
+            if not isfinite(value):
                 continue
-
-            if numeric_value < voltage_min:
-                violations.append(
-                    ContingencyViolation(
-                        category="voltage_low",
-                        element_id=bus.id,
-                        value=numeric_value,
-                        limit=voltage_min,
-                        severity=(
-                            voltage_min - numeric_value
-                        ),
-                    )
-                )
-
-            elif numeric_value > voltage_max:
-                violations.append(
-                    ContingencyViolation(
-                        category="voltage_high",
-                        element_id=bus.id,
-                        value=numeric_value,
-                        limit=voltage_max,
-                        severity=(
-                            numeric_value - voltage_max
-                        ),
-                    )
-                )
-
+            limit_percent = 100.0 if record.get("limit_mva") is not None else float(default_limit)
+            within_limit = record.get("within_limit")
+            violated = within_limit is False or (within_limit is None and value > limit_percent)
+            if violated:
+                limit = record.get("limit_mva")
+                severity = value - limit_percent
+                violations.append(ContingencyViolation(category, element_id, value, limit, severity))
         return violations
 
-    # =================================================================
-    # LINE THERMAL VIOLATIONS
-    # =================================================================
-
     @staticmethod
-    def _detect_loading_violations(
-        network: Any,
-        loading: Any,
-        thermal_limit: float,
-    ) -> List[ContingencyViolation]:
-        """
-        Detect line-loading violations.
-
-        Loading is expected in percent.
-        """
-
-        violations: List[ContingencyViolation] = []
-
-        try:
-            values = list(loading)
-        except TypeError:
-            return violations
-
-        lines = list(network.lines)
-
-        for index, value in enumerate(values):
-
-            if index >= len(lines):
-                break
-
-            line = lines[index]
-
-            try:
-                numeric_value = float(value)
-            except (TypeError, ValueError):
-                continue
-
-            if not isfinite(numeric_value):
-                continue
-
-            limit = getattr(
-                line,
-                "loading_limit",
-                thermal_limit,
-            )
-
-            try:
-                limit = float(limit)
-            except (TypeError, ValueError):
-                limit = thermal_limit
-
-            if not isfinite(limit):
-                limit = thermal_limit
-
-            if numeric_value > limit:
-                violations.append(
-                    ContingencyViolation(
-                        category="thermal",
-                        element_id=line.id,
-                        value=numeric_value,
-                        limit=limit,
-                        severity=(
-                            numeric_value - limit
-                        ),
-                    )
-                )
-
-        return violations
-
-    # =================================================================
-    # TRANSFORMER THERMAL VIOLATIONS
-    # =================================================================
-
-    @staticmethod
-    def _detect_transformer_loading_violations(
-        network: Any,
-        loading: Any,
-        thermal_limit: float,
-    ) -> List[ContingencyViolation]:
-        """
-        Detect transformer-loading violations.
-
-        Transformer electrical calculations are not performed here.
-        """
-
-        violations: List[ContingencyViolation] = []
-
-        try:
-            values = list(loading)
-        except TypeError:
-            return violations
-
-        transformers = list(
-            network.transformers
-        )
-
-        for index, value in enumerate(values):
-
-            if index >= len(transformers):
-                break
-
-            transformer = transformers[index]
-
-            try:
-                numeric_value = float(value)
-            except (TypeError, ValueError):
-                continue
-
-            if not isfinite(numeric_value):
-                continue
-
-            limit = getattr(
-                transformer,
-                "loading_limit",
-                thermal_limit,
-            )
-
-            try:
-                limit = float(limit)
-            except (TypeError, ValueError):
-                limit = thermal_limit
-
-            if not isfinite(limit):
-                limit = thermal_limit
-
-            if numeric_value > limit:
-                violations.append(
-                    ContingencyViolation(
-                        category="transformer_thermal",
-                        element_id=transformer.id,
-                        value=numeric_value,
-                        limit=limit,
-                        severity=(
-                            numeric_value - limit
-                        ),
-                    )
-                )
-
-        return violations
-
-    # =================================================================
-    # RESULT HELPERS
-    # =================================================================
-
-    @staticmethod
-    def _extract_result_value(
-        result: Any,
-        name: str,
-    ) -> Any:
-        """
-        Extract a result field from either:
-
-            - dictionary-style result
-            - object-style result
-
-        This is the compatibility boundary between the Analysis
-        Layer and solver result representations.
-        """
-
+    def _extract_result_value(result: Any, name: str) -> Any:
         if result is None:
             return None
-
         if isinstance(result, dict):
             return result.get(name)
-
-        return getattr(
-            result,
-            name,
-            None,
-        )
+        return getattr(result, name, None)
 
     @classmethod
-    def _result_converged(
-        cls,
-        result: Any,
-    ) -> bool:
-        """
-        Determine whether the power-flow result converged.
-        """
-
-        value = cls._extract_result_value(
-            result,
-            "converged",
-        )
-
+    def _result_converged(cls, result: Any) -> bool:
+        value = cls._extract_result_value(result, "converged")
         if value is None:
-            return False
-
+            value = cls._extract_result_value(result, "success")
         return bool(value)
 
-    # =================================================================
-    # CASE IDENTIFICATION
-    # =================================================================
+    @staticmethod
+    def _make_case_id(outages: Tuple[Any, ...]) -> str:
+        return "N-{}:{}".format(len(outages), "+".join(str(item) for item in outages))
 
     @staticmethod
-    def _make_case_id(
-        outages: Tuple[Any, ...],
-    ) -> str:
-        """
-        Create deterministic contingency case identifier.
-        """
-
-        return "N-{}:{}".format(
-            len(outages),
-            "+".join(
-                str(item)
-                for item in outages
-            ),
-        )
-
-    # =================================================================
-    # LIMIT VALIDATION
-    # =================================================================
-
-    @staticmethod
-    def _validate_limits(
-        *,
-        voltage_min: float,
-        voltage_max: float,
-        thermal_limit: float,
-    ) -> None:
-        """
-        Validate engineering limits.
-        """
-
+    def _validate_limits(*, voltage_min: float, voltage_max: float, thermal_limit: float) -> None:
         try:
             v_min = float(voltage_min)
             v_max = float(voltage_max)
             thermal = float(thermal_limit)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "Voltage and thermal limits must be numeric."
-            ) from exc
-
-        if not (
-            isfinite(v_min)
-            and isfinite(v_max)
-            and isfinite(thermal)
-        ):
-            raise ValueError(
-                "Voltage and thermal limits must be finite."
-            )
-
+            raise ValueError("Voltage and thermal limits must be numeric.") from exc
+        if not (isfinite(v_min) and isfinite(v_max) and isfinite(thermal)):
+            raise ValueError("Voltage and thermal limits must be finite.")
         if v_min < 0.0:
-            raise ValueError(
-                "voltage_min cannot be negative."
-            )
-
+            raise ValueError("voltage_min cannot be negative.")
         if v_max <= v_min:
-            raise ValueError(
-                "voltage_max must be greater than "
-                "voltage_min."
-            )
-
+            raise ValueError("voltage_max must be greater than voltage_min.")
         if thermal < 0.0:
-            raise ValueError(
-                "thermal_limit cannot be negative."
-            )
-
-    # =================================================================
-    # NETWORK VALIDATION
-    # =================================================================
+            raise ValueError("thermal_limit cannot be negative.")
 
     def _validate_network(self) -> None:
-        """
-        Validate the minimum public Network interface required
-        by contingency analysis.
-        """
-
         if self.network is None:
-            raise ValueError(
-                "Contingency Analysis requires "
-                "a valid Network."
-            )
-
-        required = (
-            "buses",
-            "lines",
-            "transformers",
-            "generators",
-            "loads",
-            "shunts",
-        )
-
+            raise ValueError("Contingency Analysis requires a valid Network.")
+        required = ("buses", "lines", "transformers", "generators", "loads", "shunts")
         for attribute in required:
-            if not hasattr(
-                self.network,
-                attribute,
-            ):
-                raise ValueError(
-                    "Network is missing required "
-                    f"attribute or method "
-                    f"'{attribute}'."
-                )
-
+            if not hasattr(self.network, attribute):
+                raise ValueError(f"Network is missing required attribute or method '{attribute}'.")
         if len(self.network.buses) == 0:
-            raise ValueError(
-                "Contingency Analysis requires "
-                "at least one bus."
-            )
-
-    # =================================================================
-    # RESULT ACCESS
-    # =================================================================
+            raise ValueError("Contingency Analysis requires at least one bus.")
 
     @property
     def result(self) -> Optional[ContingencyResult]:
-        """
-        Return the latest contingency-study result.
-        """
-
         return self._result
 
 
-# =====================================================================
-# PUBLIC API
-# =====================================================================
-
-__all__ = [
-    "ContingencyAnalysis",
-    "ContingencyResult",
-    "ContingencyCaseResult",
-    "ContingencyViolation",
-]
+__all__ = ["ContingencyAnalysis", "ContingencyResult", "ContingencyCaseResult", "ContingencyViolation"]
