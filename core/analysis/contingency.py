@@ -208,7 +208,9 @@ class ContingencyAnalysis:
             power_flow_result = power_flow.solve()
             case_result.power_flow_result = power_flow_result
             case_result.converged = self._result_converged(power_flow_result)
-            case_result.success = True
+            case_result.success = case_result.converged
+            if not case_result.success:
+                return case_result
             case_result.violations = self._detect_violations(
                 case_network,
                 power_flow_result,
@@ -365,7 +367,6 @@ class ContingencyAnalysis:
         thermal_limit: float,
     ) -> List[ContingencyViolation]:
         violations: List[ContingencyViolation] = []
-        voltage = self._extract_result_value(power_flow_result, "voltage_magnitudes")
         bus_results = self._extract_result_value(power_flow_result, "bus_results")
         if bus_results:
             for bus_id, record in bus_results.items():
@@ -382,23 +383,6 @@ class ContingencyAnalysis:
                     violations.append(ContingencyViolation("voltage_low", bus_id, numeric_value, voltage_min, voltage_min - numeric_value))
                 elif numeric_value > voltage_max:
                     violations.append(ContingencyViolation("voltage_high", bus_id, numeric_value, voltage_max, numeric_value - voltage_max))
-        elif voltage is not None:
-            buses = {str(bus.id): bus for bus in network.buses}
-            ids = tuple(str(bus.id) for bus in network.buses)
-            for index, value in enumerate(voltage):
-                if index >= len(ids):
-                    break
-                try:
-                    numeric_value = float(value)
-                except (TypeError, ValueError):
-                    continue
-                if not isfinite(numeric_value):
-                    continue
-                bus_id = ids[index]
-                if numeric_value < voltage_min:
-                    violations.append(ContingencyViolation("voltage_low", buses.get(bus_id, bus_id).id if bus_id in buses else bus_id, numeric_value, voltage_min, voltage_min - numeric_value))
-                elif numeric_value > voltage_max:
-                    violations.append(ContingencyViolation("voltage_high", buses.get(bus_id, bus_id).id if bus_id in buses else bus_id, numeric_value, voltage_max, numeric_value - voltage_max))
 
         branch_results = self._extract_result_value(power_flow_result, "branch_results")
         if branch_results is not None:
