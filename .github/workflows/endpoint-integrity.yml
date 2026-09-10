@@ -1,0 +1,42 @@
+name: GridForge endpoint integrity
+
+on:
+  push:
+    branches:
+      - 'remediation/endpoint-integrity-2026-09-10'
+  workflow_dispatch:
+
+jobs:
+  endpoint-targeted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest numpy scipy
+      - name: Compile endpoint module
+        run: python -m py_compile core/network/endpoint.py
+      - name: Run endpoint boundary tests
+        run: python -m pytest -q tests/core/test_endpoint_integrity.py
+      - name: Run Power Flow identity and preparation regressions
+        run: >-
+          python -m pytest -q
+          tests/core/analysis/test_power_flow_gf_aud_207_208.py
+          tests/core/analysis/test_power_flow_preparation_orchestration_gf_aud_216.py
+          tests/core/analysis/test_power_flow_preparation_snapshot_gf_aud_214.py
+          tests/core/analysis/test_prepared_power_flow_boundary.py
+          tests/core/analysis/test_prepared_power_flow_identity_contract.py
+
+  full-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest numpy scipy
+      - name: Run full regression suite
+        run: python -m pytest -q
