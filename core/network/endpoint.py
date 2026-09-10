@@ -1,11 +1,7 @@
 # ============================================================
-
 # File: core/network/endpoint.py
-
 # GridForge V2 — Network Endpoint Resolution
-
 # Author: Subhendu Mishra
-
 # ============================================================
 
 """
@@ -90,94 +86,93 @@ from __future__ import annotations
 from typing import Any
 
 # ============================================================
-
 # TERMINAL -> BUS RESOLUTION
-
 # ============================================================
 
+
 def resolve_terminal_bus(
-terminal: Any,
+    terminal: Any,
 ) -> Any:
-"""
-Resolve a Terminal to its electrical Bus.
+    """
+    Resolve a Terminal to its electrical Bus.
 
-```
-Resolution order
-----------------
+    ```
+    Resolution order
+    ----------------
 
-1. Read ``terminal.endpoint``.
-2. Reject a missing endpoint.
-3. Reject Terminal-to-Terminal chaining.
-4. If the endpoint exposes a non-None ``bus`` attribute,
-   resolve through that attribute.
-5. Otherwise treat the endpoint itself as the resolved Bus-like
-   object.
+    1. Read ``terminal.endpoint``.
+    2. Reject a missing endpoint.
+    3. Reject Terminal-to-Terminal chaining.
+    4. If the endpoint exposes a non-None ``bus`` attribute,
+       resolve through that attribute.
+    5. Otherwise treat the endpoint itself as the resolved Bus-like
+       object.
 
-This function is intentionally read-only.
+    This function is intentionally read-only.
 
-Parameters
-----------
-terminal:
-    Terminal-like object exposing an ``endpoint`` attribute.
+    Parameters
+    ----------
+    terminal:
+        Terminal-like object exposing an ``endpoint`` attribute.
 
-Returns
--------
-Any
-    The resolved Bus-like object.
+    Returns
+    -------
+    Any
+        The resolved Bus-like object.
 
-Raises
-------
-ValueError
-    If the terminal is missing, has no endpoint, or resolves to
-    another Terminal.
+    Raises
+    ------
+    ValueError
+        If the terminal is missing, has no endpoint, or resolves to
+        another Terminal.
 
-Notes
------
-Concrete Bus type validation belongs to the appropriate Network
-and validation contracts. This resolver performs only canonical
-endpoint interpretation.
-"""
+    Notes
+    -----
+    Concrete Bus type validation belongs to the appropriate Network
+    and validation contracts. This resolver performs only canonical
+    endpoint interpretation.
+    """
 
-if terminal is None:
-    raise ValueError(
-        "Terminal cannot be None."
+    if terminal is None:
+        raise ValueError(
+            "Terminal cannot be None."
+        )
+
+    endpoint = getattr(
+        terminal,
+        "endpoint",
+        None,
     )
 
-endpoint = getattr(
-    terminal,
-    "endpoint",
-    None,
-)
+    if endpoint is None:
+        raise ValueError(
+            "Terminal does not have an endpoint."
+        )
 
-if endpoint is None:
-    raise ValueError(
-        "Terminal does not have an endpoint."
+    # Import locally to avoid creating a module-level dependency cycle
+    # between model and network package initialization.
+    from core.model.terminal import Terminal
+
+    if isinstance(
+        endpoint,
+        Terminal,
+    ):
+        raise ValueError(
+            "Terminal-to-Terminal endpoint chaining is not supported."
+        )
+
+    resolved_bus = getattr(
+        endpoint,
+        "bus",
+        None,
     )
 
-# Import locally to avoid creating a module-level dependency cycle
-# between model and network package initialization.
-from core.model.terminal import Terminal
+    if resolved_bus is not None:
+        return resolved_bus
 
-if isinstance(
-    endpoint,
-    Terminal,
-):
-    raise ValueError(
-        "Terminal-to-Terminal endpoint chaining is not supported."
-    )
+    return endpoint
 
-resolved_bus = getattr(
-    endpoint,
-    "bus",
-    None,
-)
-
-if resolved_bus is not None:
-    return resolved_bus
-
-return endpoint
-```
 
 __all__ = [
-"resolve_terminal_bus",
+    "resolve_terminal_bus",
 ]
