@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 
+from core.analysis.contingency import ContingencyAnalysis
 from core.analysis.power_flow_preparation import PreparedBranch, PreparedPowerFlow, PreparedTransformer
 from core.analysis.power_flow_result_conversion import PowerFlowResultConverter
 from core.analysis.transformer_flow import TransformerFlowCalculator
@@ -130,3 +131,54 @@ def test_power_flow_result_engineering_payload_is_immutable():
         pass
     else:
         raise AssertionError("PowerFlowResult engineering results must be immutable")
+
+
+def test_contingency_violations_use_stable_id_engineering_results():
+    analysis = ContingencyAnalysis.__new__(ContingencyAnalysis)
+
+    class _Bus:
+        def __init__(self, bus_id):
+            self.id = bus_id
+
+    class _Network:
+        buses = [_Bus("B1"), _Bus("B2")]
+        lines = []
+        transformers = []
+
+    result = PowerFlowResult(
+        success=True,
+        iterations=1,
+        error=0.0,
+        pv_to_pq=(),
+        history=(0.0,),
+        message="Converged",
+        voltage_magnitudes=(1.0, 0.98),
+        voltage_angles=(0.0, 0.0),
+        branch_results={
+            "L-42": {
+                "loading_percent": 125.0,
+                "limit_mva": 80.0,
+                "within_limit": False,
+            }
+        },
+        transformer_results={
+            "T-7": {
+                "loading_percent": 110.0,
+                "limit_mva": 100.0,
+                "within_limit": False,
+            }
+        },
+    )
+
+    violations = analysis._detect_violations(
+        _Network(),
+        result,
+        voltage_min=0.95,
+        voltage_max=1.05,
+        thermal_limit=100.0,
+    )
+
+    assert [(v.category, v.element_id) for v in violations] == [
+        ("thermal", "L-42"),
+        ("transformer_thermal", "T-7"),
+    ]
