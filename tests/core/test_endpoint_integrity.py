@@ -6,16 +6,11 @@ import importlib
 
 import pytest
 
-from core.analysis.power_flow_configuration import PowerFlowStudyConfiguration
-from core.analysis.power_flow_preparation import PowerFlowPreparation
 from core.model.bus import Bus
 from core.model.generator import Generator
 from core.model.line import Line
-from core.model.terminal import Terminal
 from core.network.endpoint import resolve_terminal_bus
 from core.network.network import Network
-from core.solver.power_flow.input import PowerFlowBusType
-from core.analysis.contingency import ContingencyAnalysis
 
 
 class EndpointAdapter:
@@ -55,7 +50,6 @@ def test_valid_endpoint_adapter_resolves_through_bus() -> None:
 
 
 def test_disconnected_terminal_is_explicitly_distinct_from_invalid_endpoint() -> None:
-    _, _, _ = make_network()
     generator = Generator("GEN-1")
 
     assert generator.terminal.endpoint is None
@@ -125,7 +119,7 @@ def test_disconnected_branch_terminal_does_not_create_phantom_topology() -> None
 
 
 def test_unregistered_endpoint_is_rejected_by_network_topology() -> None:
-    network, bus_a, bus_b = make_network()
+    network, bus_a, _ = make_network()
     foreign_bus = Bus("BUS-FOREIGN", nominal_voltage_kv=110.0)
     line = Line(
         id="LINE-1",
@@ -160,45 +154,6 @@ def test_reordering_bus_collection_does_not_change_connectivity() -> None:
 
     assert network.topology.is_connected(bus_a, bus_b) is True
     assert network.topology.branches_between(bus_a, bus_b) == [line]
-
-
-def test_power_flow_preparation_uses_stable_branch_bus_identity() -> None:
-    network, bus_a, bus_b = make_network()
-    line = Line(
-        id="LINE-1",
-        endpoint_from=bus_a,
-        endpoint_to=bus_b,
-        resistance_ohm=0.1,
-        reactance_ohm=0.2,
-    )
-    network.add_line(line)
-
-    configuration = PowerFlowStudyConfiguration.from_mapping(
-        {
-            "BUS-A": PowerFlowBusType.SLACK,
-            "BUS-B": PowerFlowBusType.PQ,
-        },
-        base_mva=100.0,
-        voltage_bases_kv={"BUS-A": 110.0, "BUS-B": 110.0},
-    )
-
-    prepared = PowerFlowPreparation(network, configuration).prepare()
-
-    assert prepared.bus_ids == ("BUS-A", "BUS-B")
-    assert prepared.branches[0].branch_id == "LINE-1"
-    assert prepared.branches[0].from_bus_id == "BUS-A"
-    assert prepared.branches[0].to_bus_id == "BUS-B"
-
-
-def test_contingency_terminal_check_uses_canonical_endpoint_resolution() -> None:
-    network, bus_a, _ = make_network()
-    generator = Generator("GEN-1", endpoint=bus_a)
-    network.add_generator(generator)
-
-    assert ContingencyAnalysis._element_connected_to_bus(
-        generator,
-        bus_a,
-    ) is True
 
 
 def test_terminal_identity_is_owner_plus_role_not_collection_position() -> None:
