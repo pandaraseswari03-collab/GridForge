@@ -455,6 +455,9 @@ class SLDService:
         if projection_source is not None and presentation_owner != "projection":
             raise ValueError("projection_source requires presentation_owner='projection'.")
         properties = {"presentation_owner": presentation_owner}
+        connection_kind = p.get("connection_kind")
+        if connection_kind is not None:
+            properties["connection_kind"] = str(connection_kind)
         if projection_source is not None:
             properties["projection_source"] = str(projection_source)
         self.document.model.create_connection(
