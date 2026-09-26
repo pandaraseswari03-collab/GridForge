@@ -547,45 +547,18 @@ class SLDService:
         connection_id = command.payload["connection_id"]
         connection = self.document.model.get_connection(connection_id)
 
-        # Projection-owned Simple Wire deletion is an Application command
-        # flowing through the same transaction. The SLD connection is only a
-        # projection and never becomes the authority for engineering removal.
+        # Projection-owned Simple Wire presentation is not an independent
+        # electrical authority. Electrical deletion must originate from the
+        # Core SimpleWire command; Application pre-commit then removes the
+        # persistent SLD companion in the same transaction.
         if (
             connection.properties.get("projection_source") == "application_read_model"
             and connection.properties.get("connection_kind") == "SIMPLE_WIRE"
         ):
-            if context is None:
-                raise RuntimeError("Simple Wire projection deletion requires the Application command context.")
-            from ..commands.simple_wire_commands import RemoveSimpleWireConnectionCommand
-            from .simple_wire_service import SimpleWireConnectionService
-
-            domain_result = SimpleWireConnectionService().execute(
-                RemoveSimpleWireConnectionCommand(connection_id=connection_id),
-                context,
-                transaction,
-            )
-            snapshot = connection.to_dict()
-            self.document.model.remove_connection(connection_id)
-            self.document.mark_modified()
-
-            def restore_projection() -> None:
-                self.document.model.create_connection(
-                    connection_id=snapshot["connection_id"],
-                    source_node_id=snapshot["source_node_id"],
-                    target_node_id=snapshot["target_node_id"],
-                    source_endpoint=snapshot.get("source_endpoint"),
-                    target_endpoint=snapshot.get("target_endpoint"),
-                    route=snapshot.get("route"),
-                    properties=snapshot.get("properties", {}),
-                )
-
-            transaction.record_undo(restore_projection)
-            return ApplicationResult.success_result(
-                message=f"Simple Wire {connection_id} removed through the Application boundary.",
-                metadata={
-                    **dict(domain_result.metadata),
-                    "presentation_operation": "remove_projection_connection",
-                },
+            raise ValueError(
+                "Projection-owned Simple Wire SLD connections cannot be removed "
+                "through an SLD-only command; use the Application Simple Wire "
+                "deletion command."
             )
 
         self._require_engineer_owned_connection(connection)
