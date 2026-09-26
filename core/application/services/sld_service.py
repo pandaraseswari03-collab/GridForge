@@ -127,6 +127,7 @@ class SLDService:
         node = self.document.model.get_node(p["node_id"])
         previous = node.position
         self.document.set_node_position(p["node_id"], float(p["x"]), float(p["y"]))
+        node.properties["position_owner"] = "engineer"
         transaction.record_undo(
             lambda node_id=p["node_id"], position=previous: self.document.set_node_position(node_id, *position)
         )
@@ -138,18 +139,22 @@ class SLDService:
     def _set_node_presentation(self, command: Command, transaction: Transaction) -> ApplicationResult:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
-        self._require_engineer_owned_node(node)
         previous = None if node.presentation is None else node.presentation.to_dict()
+        previous_properties = dict(node.properties)
         node.set_presentation(p["presentation"])
+        node.properties["symbol_owner"] = "engineer"
+        node.properties.setdefault("presentation_owner", "projection" if node.properties.get("projection_source") else "engineer")
         self.document.mark_modified()
-        if previous is None:
-            transaction.record_undo(
-                lambda node_id=p["node_id"]: self.document.model.get_node(node_id).clear_presentation()
-            )
-        else:
-            transaction.record_undo(
-                lambda node_id=p["node_id"], snapshot=previous: self.document.model.get_node(node_id).set_presentation(snapshot)
-            )
+        def restore() -> None:
+            target = self.document.model.get_node(node_id=p["node_id"])
+            if previous is None:
+                target.clear_presentation()
+            else:
+                target.set_presentation(previous)
+            target.properties.clear()
+            target.properties.update(previous_properties)
+            self.document.mark_modified()
+        transaction.record_undo(restore)
         return ApplicationResult.success_result(
             message="SLD node presentation updated.",
             metadata={"presentation_operation": "set_node_presentation", "node_id": p["node_id"]},
@@ -464,11 +469,16 @@ class SLDService:
     def _set_node_properties(self, command: Command, transaction: Transaction) -> ApplicationResult:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
-        self._require_engineer_owned_node(node)
         previous = dict(node.properties)
         properties = p["properties"]
         if not isinstance(properties, Mapping):
             raise TypeError("properties must be a mapping")
+        semantic_keys = {
+            "equipment_id", "element_type", "terminal_ids", "terminal_connectivity",
+            "attributes", "labels", "projection_source", "lifecycle_state",
+        }
+        if semantic_keys.intersection(properties):
+            raise ValueError("SLD semantic binding fields are Application-owned and cannot be edited as presentation properties.")
         node.properties.update(dict(properties))
         self.document.mark_modified()
         transaction.record_undo(lambda node=node, snapshot=previous: (node.properties.clear(), node.properties.update(snapshot)))
@@ -489,8 +499,8 @@ class SLDService:
         if updated.ownership != "engineer":
             updated = updated.__class__(routing_mode=updated.routing_mode, ownership="engineer", points=updated.points)
         connection.route = updated
-        connection.properties.pop("projection_source", None)
-        connection.properties["presentation_owner"] = "engineer"
+        connection.properties["route_owner"] = "engineer"
+        connection.properties.setdefault("presentation_owner", "projection" if connection.properties.get("projection_source") else "engineer")
         self.document.mark_modified()
         transaction.record_undo(lambda connection=connection, route=previous, properties=previous_properties: (setattr(connection, "route", route), connection.properties.clear(), connection.properties.update(properties)))
         return ApplicationResult.success_result(
