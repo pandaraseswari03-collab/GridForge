@@ -271,12 +271,23 @@ class SLDService:
         snapshot = node.to_dict()
         owner = node.properties.get("presentation_owner")
         source = node.properties.get("projection_source")
+        attached = tuple(
+            connection for connection in self.document.model.connections
+            if connection.source_node_id == node.node_id
+            or connection.target_node_id == node.node_id
+        )
+        connection_snapshots = tuple(connection.to_dict() for connection in attached)
         if owner == "projection" and source in {"application_read_model", "protection_read_model"}:
             self.document.model.remove_node(node.node_id)
             self.document.mark_modified()
-            transaction.record_undo(
-                lambda snapshot=snapshot: self._restore_node_snapshot(snapshot)
-            )
+
+            def restore_projection(snapshot=snapshot, connection_snapshots=connection_snapshots) -> None:
+                self._restore_node_snapshot(snapshot)
+                for item in connection_snapshots:
+                    if self.document.model.get_connection_optional(item["connection_id"]) is None:
+                        self._restore_connection_snapshot(item)
+
+            transaction.record_undo(restore_projection)
             return "REMOVED"
 
         attached = tuple(
@@ -284,7 +295,6 @@ class SLDService:
             if connection.source_node_id == node.node_id
             or connection.target_node_id == node.node_id
         )
-        connection_snapshots = tuple(connection.to_dict() for connection in attached)
         for connection in attached:
             if connection.properties.get("presentation_owner") == "projection":
                 self.document.model.remove_connection(connection.connection_id)
