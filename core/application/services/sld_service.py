@@ -126,10 +126,18 @@ class SLDService:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
         previous = node.position
+        previous_properties = dict(node.properties)
         self.document.set_node_position(p["node_id"], float(p["x"]), float(p["y"]))
-        transaction.record_undo(
-            lambda node_id=p["node_id"], position=previous: self.document.set_node_position(node_id, *position)
-        )
+        node.properties["position_owner"] = "engineer"
+
+        def restore() -> None:
+            target = self.document.model.get_node(p["node_id"])
+            self.document.set_node_position(p["node_id"], *previous)
+            target.properties.clear()
+            target.properties.update(previous_properties)
+            self.document.mark_modified()
+
+        transaction.record_undo(restore)
         return ApplicationResult.success_result(
             message="SLD node position updated.",
             metadata={"presentation_operation": "set_node_position", "node_id": p["node_id"]},
@@ -138,18 +146,22 @@ class SLDService:
     def _set_node_presentation(self, command: Command, transaction: Transaction) -> ApplicationResult:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
-        self._require_engineer_owned_node(node)
         previous = None if node.presentation is None else node.presentation.to_dict()
+        previous_properties = dict(node.properties)
         node.set_presentation(p["presentation"])
+        node.properties["symbol_owner"] = "engineer"
+        node.properties.setdefault("presentation_owner", "projection" if node.properties.get("projection_source") else "engineer")
         self.document.mark_modified()
-        if previous is None:
-            transaction.record_undo(
-                lambda node_id=p["node_id"]: self.document.model.get_node(node_id).clear_presentation()
-            )
-        else:
-            transaction.record_undo(
-                lambda node_id=p["node_id"], snapshot=previous: self.document.model.get_node(node_id).set_presentation(snapshot)
-            )
+        def restore() -> None:
+            target = self.document.model.get_node(p["node_id"])
+            if previous is None:
+                target.clear_presentation()
+            else:
+                target.set_presentation(previous)
+            target.properties.clear()
+            target.properties.update(previous_properties)
+            self.document.mark_modified()
+        transaction.record_undo(restore)
         return ApplicationResult.success_result(
             message="SLD node presentation updated.",
             metadata={"presentation_operation": "set_node_presentation", "node_id": p["node_id"]},
@@ -215,6 +227,178 @@ class SLDService:
             f"SLD node equipment reference {equipment_id!r} does not resolve to current Application read state."
         )
 
+    def reconcile_element_update(
+        self,
+        *,
+        equipment_id: str,
+        element_type: str,
+        read_model: Any,
+        transaction: Transaction,
+    ) -> None:
+        """Reconcile authoritative semantic fields while preserving presentation overrides.
+
+        This is intentionally a service operation, not a second command/history
+        mechanism. It is invoked by the Application pre-commit hook inside the
+        transaction opened for the originating Core command.
+        """
+        if not isinstance(equipment_id, str) or not equipment_id:
+            raise ValueError("equipment_id must be a non-empty string")
+        node = self.document.model.get_node_by_equipment_id_optional(equipment_id)
+        if node is None:
+            return
+        previous = node.to_dict()
+        attributes = dict(getattr(read_model, "attributes", {}) or {})
+        labels = dict(getattr(read_model, "labels", {}) or {})
+        connectivity = tuple(getattr(read_model, "connectivity_refs", ()) or ())
+        node.properties.update({
+            "element_type": str(element_type),
+            "labels": labels,
+            "attributes": attributes,
+            "terminal_ids": connectivity,
+            "terminal_connectivity": tuple(attributes.get("terminal_connectivity", ())),
+            "lifecycle_state": "BOUND",
+        })
+        node.equipment_id = equipment_id
+        transaction.record_undo(
+            lambda snapshot=previous: self._restore_node_snapshot(snapshot)
+        )
+        self.document.mark_modified()
+
+    def reconcile_element_delete(
+        self,
+        *,
+        equipment_id: str,
+        transaction: Transaction,
+    ) -> str:
+        """Apply the explicit BOUND/ORPHANED/REMOVED presentation policy.
+
+        Projection-owned bindings are REMOVED with their projection-owned
+        connections. Engineer-authored presentation is retained as ORPHANED;
+        semantic binding is cleared while geometry, symbols, labels, and manual
+        route state remain intact.
+        """
+        node = self.document.model.get_node_by_equipment_id_optional(equipment_id)
+        if node is None:
+            return "REMOVED"
+        snapshot = node.to_dict()
+        owner = node.properties.get("presentation_owner")
+        source = node.properties.get("projection_source")
+        attached = tuple(
+            connection for connection in self.document.model.connections
+            if connection.source_node_id == node.node_id
+            or connection.target_node_id == node.node_id
+        )
+        connection_snapshots = tuple(connection.to_dict() for connection in attached)
+        if owner == "projection" and source in {"application_read_model", "protection_read_model"}:
+            self.document.model.remove_node(node.node_id)
+            self.document.mark_modified()
+
+            def restore_projection(snapshot=snapshot, connection_snapshots=connection_snapshots) -> None:
+                self._restore_node_snapshot(snapshot)
+                for item in connection_snapshots:
+                    if self.document.model.get_connection_optional(item["connection_id"]) is None:
+                        self._restore_connection_snapshot(item)
+
+            transaction.record_undo(restore_projection)
+            return "REMOVED"
+
+        attached = tuple(
+            connection for connection in self.document.model.connections
+            if connection.source_node_id == node.node_id
+            or connection.target_node_id == node.node_id
+        )
+        for connection in attached:
+            if connection.properties.get("presentation_owner") == "projection":
+                self.document.model.remove_connection(connection.connection_id)
+            else:
+                connection.source_endpoint = None if connection.source_node_id == node.node_id else connection.source_endpoint
+                connection.target_endpoint = None if connection.target_node_id == node.node_id else connection.target_endpoint
+                connection.properties.pop("projection_source", None)
+                connection.properties["lifecycle_state"] = "ORPHANED"
+                connection.properties["presentation_owner"] = "engineer"
+
+        node.equipment_id = None
+        node.properties.pop("projection_source", None)
+        node.properties["lifecycle_state"] = "ORPHANED"
+        node.properties["orphaned_equipment_id"] = equipment_id
+        node.properties["presentation_owner"] = "engineer"
+        self.document.mark_modified()
+
+        def restore(snapshot=snapshot, connection_snapshots=connection_snapshots) -> None:
+            self._restore_node_snapshot(snapshot)
+            for connection in tuple(self.document.model.connections):
+                if connection.connection_id in {item["connection_id"] for item in connection_snapshots}:
+                    self.document.model.remove_connection(connection.connection_id)
+            for item in connection_snapshots:
+                self.document.model.create_connection(
+                    connection_id=item["connection_id"],
+                    source_node_id=item["source_node_id"],
+                    target_node_id=item["target_node_id"],
+                    source_endpoint=item.get("source_endpoint"),
+                    target_endpoint=item.get("target_endpoint"),
+                    route=item.get("route"),
+                    properties=item.get("properties", {}),
+                )
+            self.document.mark_modified()
+
+        transaction.record_undo(restore)
+        return "ORPHANED"
+
+    def reconcile_connection_delete(
+        self,
+        *,
+        connection_id: str,
+        transaction: Transaction,
+    ) -> str:
+        """Remove or orphan an SLD connection in the originating transaction."""
+        connection = self.document.model.get_connection_optional(connection_id)
+        if connection is None:
+            return "REMOVED"
+        snapshot = connection.to_dict()
+        owner = connection.properties.get("presentation_owner")
+        if owner == "projection":
+            self.document.model.remove_connection(connection_id)
+            self.document.mark_modified()
+            transaction.record_undo(
+                lambda snapshot=snapshot: self._restore_connection_snapshot(snapshot)
+            )
+            return "REMOVED"
+        connection.source_endpoint = None
+        connection.target_endpoint = None
+        connection.properties.pop("projection_source", None)
+        connection.properties["presentation_owner"] = "engineer"
+        connection.properties["lifecycle_state"] = "ORPHANED"
+        self.document.mark_modified()
+        transaction.record_undo(
+            lambda snapshot=snapshot: self._restore_connection_snapshot(snapshot)
+        )
+        return "ORPHANED"
+
+    def _restore_node_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        self.document.model.create_node(
+            node_id=snapshot["node_id"],
+            equipment_id=snapshot.get("equipment_id"),
+            x=snapshot.get("x", 0.0),
+            y=snapshot.get("y", 0.0),
+            presentation=snapshot.get("presentation"),
+            properties=snapshot.get("properties", {}),
+        )
+        for item in snapshot.get("connections", ()):
+            self._restore_connection_snapshot(item)
+        self.document.mark_modified()
+
+    def _restore_connection_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        self.document.model.create_connection(
+            connection_id=snapshot["connection_id"],
+            source_node_id=snapshot["source_node_id"],
+            target_node_id=snapshot["target_node_id"],
+            source_endpoint=snapshot.get("source_endpoint"),
+            target_endpoint=snapshot.get("target_endpoint"),
+            route=snapshot.get("route"),
+            properties=snapshot.get("properties", {}),
+        )
+        self.document.mark_modified()
+
     def _remove_node(self, command: Command, transaction: Transaction) -> ApplicationResult:
         node_id = command.payload["node_id"]
         node = self.document.model.get_node(node_id)
@@ -271,6 +455,9 @@ class SLDService:
         if projection_source is not None and presentation_owner != "projection":
             raise ValueError("projection_source requires presentation_owner='projection'.")
         properties = {"presentation_owner": presentation_owner}
+        connection_kind = p.get("connection_kind")
+        if connection_kind is not None:
+            properties["connection_kind"] = str(connection_kind)
         if projection_source is not None:
             properties["projection_source"] = str(projection_source)
         self.document.model.create_connection(
@@ -292,11 +479,16 @@ class SLDService:
     def _set_node_properties(self, command: Command, transaction: Transaction) -> ApplicationResult:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
-        self._require_engineer_owned_node(node)
         previous = dict(node.properties)
         properties = p["properties"]
         if not isinstance(properties, Mapping):
             raise TypeError("properties must be a mapping")
+        semantic_keys = {
+            "equipment_id", "element_type", "terminal_ids", "terminal_connectivity",
+            "attributes", "labels", "projection_source", "lifecycle_state",
+        }
+        if semantic_keys.intersection(properties):
+            raise ValueError("SLD semantic binding fields are Application-owned and cannot be edited as presentation properties.")
         node.properties.update(dict(properties))
         self.document.mark_modified()
         transaction.record_undo(lambda node=node, snapshot=previous: (node.properties.clear(), node.properties.update(snapshot)))
@@ -317,8 +509,8 @@ class SLDService:
         if updated.ownership != "engineer":
             updated = updated.__class__(routing_mode=updated.routing_mode, ownership="engineer", points=updated.points)
         connection.route = updated
-        connection.properties.pop("projection_source", None)
-        connection.properties["presentation_owner"] = "engineer"
+        connection.properties["route_owner"] = "engineer"
+        connection.properties.setdefault("presentation_owner", "projection" if connection.properties.get("projection_source") else "engineer")
         self.document.mark_modified()
         transaction.record_undo(lambda connection=connection, route=previous, properties=previous_properties: (setattr(connection, "route", route), connection.properties.clear(), connection.properties.update(properties)))
         return ApplicationResult.success_result(
@@ -358,45 +550,18 @@ class SLDService:
         connection_id = command.payload["connection_id"]
         connection = self.document.model.get_connection(connection_id)
 
-        # Projection-owned Simple Wire deletion is an Application command
-        # flowing through the same transaction. The SLD connection is only a
-        # projection and never becomes the authority for engineering removal.
+        # Projection-owned Simple Wire presentation is not an independent
+        # electrical authority. Electrical deletion must originate from the
+        # Core SimpleWire command; Application pre-commit then removes the
+        # persistent SLD companion in the same transaction.
         if (
             connection.properties.get("projection_source") == "application_read_model"
             and connection.properties.get("connection_kind") == "SIMPLE_WIRE"
         ):
-            if context is None:
-                raise RuntimeError("Simple Wire projection deletion requires the Application command context.")
-            from ..commands.simple_wire_commands import RemoveSimpleWireConnectionCommand
-            from .simple_wire_service import SimpleWireConnectionService
-
-            domain_result = SimpleWireConnectionService().execute(
-                RemoveSimpleWireConnectionCommand(connection_id=connection_id),
-                context,
-                transaction,
-            )
-            snapshot = connection.to_dict()
-            self.document.model.remove_connection(connection_id)
-            self.document.mark_modified()
-
-            def restore_projection() -> None:
-                self.document.model.create_connection(
-                    connection_id=snapshot["connection_id"],
-                    source_node_id=snapshot["source_node_id"],
-                    target_node_id=snapshot["target_node_id"],
-                    source_endpoint=snapshot.get("source_endpoint"),
-                    target_endpoint=snapshot.get("target_endpoint"),
-                    route=snapshot.get("route"),
-                    properties=snapshot.get("properties", {}),
-                )
-
-            transaction.record_undo(restore_projection)
-            return ApplicationResult.success_result(
-                message=f"Simple Wire {connection_id} removed through the Application boundary.",
-                metadata={
-                    **dict(domain_result.metadata),
-                    "presentation_operation": "remove_projection_connection",
-                },
+            raise ValueError(
+                "Projection-owned Simple Wire SLD connections cannot be removed "
+                "through an SLD-only command; use the Application Simple Wire "
+                "deletion command."
             )
 
         self._require_engineer_owned_connection(connection)

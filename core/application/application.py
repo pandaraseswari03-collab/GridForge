@@ -424,61 +424,109 @@ class Application:
         self._command_manager.set_pre_commit_hook(self._coordinate_pre_commit)
 
     def _coordinate_pre_commit(self, command: Command, result: ApplicationResult, transaction: Any) -> None:
-        """Coordinate Core and persistent SLD presentation mutations in one Application transaction.
+        """Coordinate Core and persistent SLD semantic reconciliation in one transaction.
 
-        Placement commands create their SLD node here, while connection commands
-        create the endpoint-aware SLD connection here. UI tools therefore submit
-        exactly one engineering command and never open a second presentation
-        transaction after Core commit.
+        The originating Core command owns the history record. SLDService only
+        performs the persistent presentation mutation requested by this hook;
+        it never creates a second command/history boundary.
         """
         if self._sld_service is None:
             return
-        if command.command_type in {
+
+        command_type = command.command_type
+
+        if command_type in {
             "connectivity.create_simple_wire",
             "model.create_line",
             "model.create_cable",
         }:
             self._coordinate_connection_pre_commit(command, transaction)
             return
-        if command.command_type not in {"model.create_relay"} and not command.command_type.startswith("model.create_"):
+
+        if command_type in {
+            "connectivity.remove_simple_wire",
+            "model.delete_line",
+            "model.delete_cable",
+        }:
+            connection_id = str(
+                command.payload.get("connection_id")
+                or command.payload.get("line_id")
+                or command.payload.get("cable_id")
+                or ""
+            )
+            if connection_id:
+                self._sld_service.reconcile_connection_delete(
+                    connection_id=connection_id,
+                    transaction=transaction,
+                )
+
+        if not command_type.startswith("model."):
             return
-        # Most placement tools carry presentation_x/presentation_y.
-        # PlaceBusCommand is a compatibility constructor whose canonical
-        # CREATE_BUS payload still carries x/y; the Bus command handler removes
-        # those fields before Core mutation. Normalize both forms here so Bus
-        # placement participates in the same Application transaction without
-        # treating coordinates as Core electrical properties.
-        x = command.payload.get("presentation_x")
-        y = command.payload.get("presentation_y")
-        if x is None and command.command_type == "model.create_bus":
-            x = command.payload.get("x")
-        if y is None and command.command_type == "model.create_bus":
-            y = command.payload.get("y")
-        if x is None or y is None:
-            return
+
+        action = self._action_from_command_type(command_type)
         element_id = self._element_id(command)
         element_type = self._element_type(command)
         if element_id is None or element_type is None:
-            raise ValueError("Placement command must expose canonical element identity and type.")
+            return
+
+        if action == "delete":
+            self._sld_service.reconcile_element_delete(
+                equipment_id=element_id,
+                transaction=transaction,
+            )
+            return
+
+        if action != "create":
+            if action == "update":
+                try:
+                    read_model = self.read_element(element_type, element_id)
+                except (KeyError, ValueError):
+                    return
+                self._sld_service.reconcile_element_update(
+                    equipment_id=element_id,
+                    element_type=element_type,
+                    read_model=read_model,
+                    transaction=transaction,
+                )
+            return
+
+        # Placement commands carry presentation coordinates while Core remains
+        # authoritative for electrical identity. A generated SLD node is
+        # projection-owned; only the explicit position field is engineer-owned.
+        x = command.payload.get("presentation_x")
+        y = command.payload.get("presentation_y")
+        if x is None and command_type == "model.create_bus":
+            x = command.payload.get("x")
+        if y is None and command_type == "model.create_bus":
+            y = command.payload.get("y")
+        if x is None or y is None:
+            return
+
         source = "protection_read_model" if element_type.upper() == "RELAY" else "application_read_model"
         existing = self._sld_service.document.model.get_node_by_equipment_id_optional(element_id)
         if existing is not None:
-            owner = existing.properties.get("presentation_owner")
-            if owner == "engineer" and existing.properties.get("projection_source") is None:
+            if existing.properties.get("presentation_owner") == "engineer" and existing.properties.get("projection_source") is None:
+                # An explicitly authored presentation already exists. Preserve
+                # it; semantic reconciliation remains active on later updates.
                 return
             if existing.properties.get("projection_source") != source:
-                raise ValueError(f"Placement projection ownership collision for equipment ID: {element_id!r}")
+                raise ValueError(
+                    f"Placement projection ownership collision for equipment ID: {element_id!r}"
+                )
             return
+
+        presentation_properties = dict(command.payload.get("presentation_properties", {}))
+        presentation_properties["position_owner"] = "engineer"
         projection_result = self._sld_service.execute(
             AddSLDNodeCommand(
                 node_id=f"sld-node-{element_id}",
                 equipment_id=element_id,
                 x=float(x),
                 y=float(y),
-                presentation_owner="engineer",
-                projection_source=None,
+                presentation_owner="projection",
+                projection_source=source,
                 element_type=element_type,
-                presentation_properties=(dict(command.payload.get("presentation_properties", {})) if command.command_type == "model.create_bus" else None),
+                presentation_properties=presentation_properties,
                 correlation_id=command.correlation_id,
                 causation_id=command.command_id,
             ),
@@ -488,7 +536,7 @@ class Application:
             raise RuntimeError(projection_result.message)
 
     def _coordinate_connection_pre_commit(self, command: Command, transaction: Any) -> None:
-        """Create the semantic SLD connection companion before the Core transaction commits."""
+        """Create the semantic SLD connection companion before Core commit."""
         if self._sld_service is None:
             return
 
@@ -496,10 +544,12 @@ class Application:
             source_ref = command.payload["endpoint_a"]
             target_ref = command.payload["endpoint_b"]
             connection_id = str(command.payload["connection_id"])
+            connection_kind = "SIMPLE_WIRE"
         else:
             source_ref = command.payload["endpoint_from"]
             target_ref = command.payload["endpoint_to"]
             connection_id = str(command.payload.get("line_id") or command.payload.get("cable_id"))
+            connection_kind = "CABLE" if command.command_type == "model.create_cable" else "LINE"
 
         if not isinstance(source_ref, EndpointReference) or not isinstance(target_ref, EndpointReference):
             raise ValueError("Connection commands require canonical EndpointReference endpoints.")
@@ -516,6 +566,7 @@ class Application:
                 source_endpoint=source,
                 target_endpoint=target,
                 route={"routing_mode": "orthogonal", "ownership": "auto", "points": []},
+                connection_kind=connection_kind,
                 presentation_owner="projection",
                 projection_source="application_read_model",
                 correlation_id=command.correlation_id,
@@ -719,7 +770,7 @@ class Application:
                 "activation_generation": self.project_lifecycle.activation_generation}
 
     def _publish_semantic_events(self, command: Command, result: ApplicationResult, *, operation: str) -> None:
-        metadata = {**dict(result.metadata), "command_id": str(command.command_id), "message": result.message, "operation": operation}
+        metadata = {**dict(result.metadata), "command_id": str(command.command_id), "message": result.message, "operation": operation, **self._project_scope_metadata()}
         if command.command_type in {"connectivity.create_simple_wire", "connectivity.remove_simple_wire"}:
             action = "create" if command.command_type.endswith("create_simple_wire") else "remove"
             if operation == "undo":

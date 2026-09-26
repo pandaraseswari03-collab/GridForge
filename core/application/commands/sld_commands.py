@@ -94,22 +94,45 @@ class RemoveSLDNodeCommand(Command):
 
 
 class AddSLDConnectionCommand(Command):
-    def __init__(self, *, connection_id: str, source_node_id: str, target_node_id: str,
-                 source_endpoint: dict | None = None, target_endpoint: dict | None = None,
-                 route: dict | None = None,
-                 command_id: UUID | None = None, correlation_id: UUID | None = None,
-                 causation_id: UUID | None = None) -> None:
-        super().__init__(command_type=ADD_SLD_CONNECTION,
-                         payload={
-                             "connection_id": connection_id,
-                             "source_node_id": source_node_id,
-                             "target_node_id": target_node_id,
-                             "source_endpoint": None if source_endpoint is None else dict(source_endpoint),
-                             "target_endpoint": None if target_endpoint is None else dict(target_endpoint),
-                             "route": None if route is None else dict(route),
-                         },
-                         command_id=command_id or uuid4(), correlation_id=correlation_id, causation_id=causation_id)
+    """Create one persistent SLD connection with explicit ownership contract."""
 
+    def __init__(
+        self,
+        *,
+        connection_id: str,
+        source_node_id: str,
+        target_node_id: str,
+        source_endpoint: dict | None = None,
+        target_endpoint: dict | None = None,
+        route: dict | None = None,
+        connection_kind: str | None = None,
+        presentation_owner: str = "engineer",
+        projection_source: str | None = None,
+        command_id: UUID | None = None,
+        correlation_id: UUID | None = None,
+        causation_id: UUID | None = None,
+    ) -> None:
+        if presentation_owner not in {"engineer", "projection"}:
+            raise ValueError("presentation_owner must be 'engineer' or 'projection'.")
+        if projection_source is not None and presentation_owner != "projection":
+            raise ValueError("projection_source requires presentation_owner='projection'.")
+        super().__init__(
+            command_type=ADD_SLD_CONNECTION,
+            payload={
+                "connection_id": connection_id,
+                "source_node_id": source_node_id,
+                "target_node_id": target_node_id,
+                "source_endpoint": None if source_endpoint is None else dict(source_endpoint),
+                "target_endpoint": None if target_endpoint is None else dict(target_endpoint),
+                "route": None if route is None else dict(route),
+                "connection_kind": connection_kind,
+                "presentation_owner": presentation_owner,
+                "projection_source": projection_source,
+            },
+            command_id=command_id or uuid4(),
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+        )
 
 class SetSLDNodePropertiesCommand(Command):
     def __init__(self, *, node_id: str, properties: dict,
