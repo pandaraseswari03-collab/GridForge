@@ -767,7 +767,7 @@ class Application:
                 "activation_generation": self.project_lifecycle.activation_generation}
 
     def _publish_semantic_events(self, command: Command, result: ApplicationResult, *, operation: str) -> None:
-        metadata = {**dict(result.metadata), "command_id": str(command.command_id), "message": result.message, "operation": operation}
+        metadata = {**dict(result.metadata), "command_id": str(command.command_id), "message": result.message, "operation": operation, **self._project_scope_metadata()}
         if command.command_type in {"connectivity.create_simple_wire", "connectivity.remove_simple_wire"}:
             action = "create" if command.command_type.endswith("create_simple_wire") else "remove"
             if operation == "undo":
