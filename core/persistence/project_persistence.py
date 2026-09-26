@@ -191,6 +191,13 @@ class ProjectPersistenceService:
         if not isinstance(context, ProjectContext) or not isinstance(network, Network):
             raise ProjectPersistenceError("Project context or Network is invalid.")
         if presentation is not None:
+            if not isinstance(presentation, Mapping):
+                raise ProjectPersistenceError("Persistent SLD representation must be a mapping.")
+            sld_schema = presentation.get("schema", 1)
+            if sld_schema not in (1, 2):
+                raise ProjectPersistenceError(
+                    f"Unsupported SLD representation schema: {sld_schema!r}"
+                )
             sld_validation = ValidationService.validate_sld_associations(
                 context,
                 network,
