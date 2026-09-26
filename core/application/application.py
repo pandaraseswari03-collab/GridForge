@@ -544,10 +544,12 @@ class Application:
             source_ref = command.payload["endpoint_a"]
             target_ref = command.payload["endpoint_b"]
             connection_id = str(command.payload["connection_id"])
+            connection_kind = "SIMPLE_WIRE"
         else:
             source_ref = command.payload["endpoint_from"]
             target_ref = command.payload["endpoint_to"]
             connection_id = str(command.payload.get("line_id") or command.payload.get("cable_id"))
+            connection_kind = "CABLE" if command.command_type == "model.create_cable" else "LINE"
 
         if not isinstance(source_ref, EndpointReference) or not isinstance(target_ref, EndpointReference):
             raise ValueError("Connection commands require canonical EndpointReference endpoints.")
@@ -564,6 +566,7 @@ class Application:
                 source_endpoint=source,
                 target_endpoint=target,
                 route={"routing_mode": "orthogonal", "ownership": "auto", "points": []},
+                connection_kind=connection_kind,
                 presentation_owner="projection",
                 projection_source="application_read_model",
                 correlation_id=command.correlation_id,
