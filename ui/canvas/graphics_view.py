@@ -73,6 +73,8 @@ class GraphicsView(QGraphicsView):
         if self._scene.parent() is None:
             self._scene.setParent(self)
         self.setScene(self._scene)
+        # Canvas background is a fixed UI invariant: always render white.
+        self.setBackgroundBrush(Qt.white)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
