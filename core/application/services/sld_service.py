@@ -126,11 +126,18 @@ class SLDService:
         p = command.payload
         node = self.document.model.get_node(p["node_id"])
         previous = node.position
+        previous_properties = dict(node.properties)
         self.document.set_node_position(p["node_id"], float(p["x"]), float(p["y"]))
         node.properties["position_owner"] = "engineer"
-        transaction.record_undo(
-            lambda node_id=p["node_id"], position=previous: self.document.set_node_position(node_id, *position)
-        )
+
+        def restore() -> None:
+            target = self.document.model.get_node(p["node_id"])
+            self.document.set_node_position(p["node_id"], *previous)
+            target.properties.clear()
+            target.properties.update(previous_properties)
+            self.document.mark_modified()
+
+        transaction.record_undo(restore)
         return ApplicationResult.success_result(
             message="SLD node position updated.",
             metadata={"presentation_operation": "set_node_position", "node_id": p["node_id"]},
@@ -146,7 +153,7 @@ class SLDService:
         node.properties.setdefault("presentation_owner", "projection" if node.properties.get("projection_source") else "engineer")
         self.document.mark_modified()
         def restore() -> None:
-            target = self.document.model.get_node(node_id=p["node_id"])
+            target = self.document.model.get_node(p["node_id"])
             if previous is None:
                 target.clear_presentation()
             else:
