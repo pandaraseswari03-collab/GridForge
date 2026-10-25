@@ -61,7 +61,10 @@ CONTROL_EDITOR_DEFINITION = EditorDefinition("control-editor", CONTROL_EDITOR, "
 PROTECTION_EDITOR_DEFINITION = EditorDefinition("protection-editor", PROTECTION_EDITOR, "Protection Editor", EDITOR_REGIONS)
 STUDY_EDITOR_DEFINITION = EditorDefinition(
     "study-editor", STUDY_EDITOR, "Study Editor",
-    EDITOR_REGIONS + (RegionDefinition("timeline", "timeline"),),
+    EDITOR_REGIONS + (
+        RegionDefinition("explorer", "explorer", visible=False, minimum_size=0, preferred_size=220),
+        RegionDefinition("timeline", "timeline"),
+    ),
 )
 
 def _workspace(workspace_id: str, title: str, editor: EditorDefinition, central_surface: str) -> WorkspaceDefinition:
