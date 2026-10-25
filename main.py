@@ -486,12 +486,16 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
             if object_id is not None:
                 manager.add_to_selection(object_id)
 
-    def _copy_selection() -> None:
+    def _copy_selection() -> tuple[str, ...]:
         sld_clipboard.clear()
+        copied_ids: list[str] = []
         for selected_id in canvas_composition.selection_manager.get_selected_ids():
             element = _find_network_element(selected_id)
             node = _find_sld_node(selected_id)
             if element is None or node is None:
+                continue
+            element_type = str(element.element_type).strip().lower()
+            if element_type not in {"bus", "transformer", "breaker"}:
                 continue
             read_model = gridforge_application.read_element(
                 str(element.element_type),
@@ -504,6 +508,8 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
                 "position": (float(node.x), float(node.y)),
                 "presentation": None if node.presentation is None else node.presentation.to_dict(),
             })
+            copied_ids.append(str(selected_id))
+        return tuple(copied_ids)
 
     def _paste_selection() -> None:
         if not sld_clipboard:
@@ -678,7 +684,15 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
         canvas_composition.selection_manager.clear()
 
     def _cut_selection() -> None:
-        _copy_selection()
+        # Cut must delete only the objects actually represented in the clipboard.
+        # Draft and unsupported semantic objects are intentionally left untouched.
+        copied_ids = _copy_selection()
+        if not copied_ids:
+            return
+        selection = canvas_composition.selection_manager
+        selection.clear()
+        for copied_id in copied_ids:
+            selection.add_to_selection(copied_id)
         _delete_selection()
 
     def _selected_sld_nodes() -> tuple[object, ...]:
