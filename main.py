@@ -70,6 +70,7 @@ from core.application.commands.sld_commands import AddSLDNodeCommand, RemoveSLDN
 from core.application.commands.model_commands import CREATE_BUS, CreateBusCommand, DeleteBusCommand, CreateTransformerCommand, DeleteTransformerCommand
 from core.application.commands.breaker_commands import CreateBreakerCommand, DeleteBreakerCommand
 from core.application.commands.simple_wire_commands import CREATE_SIMPLE_WIRE, RemoveSimpleWireConnectionCommand
+from core.application.commands.draft_commands import RemoveDraftConnectionCommand, RemoveDraftEquipmentCommand
 from ui.branding import BrandingService
 from ui.splash_screen import StartupSplash
 Cleanup = Callable[[], None]
@@ -403,6 +404,9 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
 
     def _show_study_cases() -> None:
         _activate_workspace(STUDY_WORKSPACE_ID, "study")
+        # The Study Cases widget is hosted in the Study Editor's explorer
+        # Region. Reveal the declared Region before asking the realizer to focus it.
+        workspace_surface_host.set_region_visible("study", "explorer", True)
         workspace_controller.realizer.focus_region("main-study", "explorer")
 
     def _show_unconfigured_surface(title: str) -> None:
@@ -579,7 +583,27 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
         if not selected_ids:
             return
 
-        for selected_id in selected_ids:
+        draft_state = gridforge_application.read_draft_network()
+        initial_draft_equipment_ids = {
+            str(item.get("draft_id"))
+            for item in (draft_state or {}).get("equipment", ())
+        }
+        initial_draft_connection_ids = {
+            str(item.get("connection_id"))
+            for item in (draft_state or {}).get("connections", ())
+        }
+
+        # Removing draft equipment also removes its attached draft connections.
+        # Process explicitly selected wires first so multi-selection remains safe.
+        ordered_selected_ids = tuple(
+            item_id for item_id in selected_ids
+            if str(item_id) in initial_draft_connection_ids
+        ) + tuple(
+            item_id for item_id in selected_ids
+            if str(item_id) not in initial_draft_connection_ids
+        )
+
+        for selected_id in ordered_selected_ids:
             element = _find_network_element(selected_id)
             if element is not None:
                 element_type = str(element.element_type).strip().lower()
@@ -595,6 +619,37 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
                     )
                 if not result.success:
                     raise RuntimeError(result.message)
+                continue
+
+            current_draft_state = gridforge_application.read_draft_network()
+            current_draft_equipment_ids = {
+                str(item.get("draft_id"))
+                for item in (current_draft_state or {}).get("equipment", ())
+            }
+            current_draft_connection_ids = {
+                str(item.get("connection_id"))
+                for item in (current_draft_state or {}).get("connections", ())
+            }
+
+            if str(selected_id) in current_draft_connection_ids:
+                result = gridforge_application.execute(
+                    RemoveDraftConnectionCommand(connection_id=str(selected_id))
+                )
+                if not result.success:
+                    raise RuntimeError(result.message)
+                continue
+
+            if str(selected_id) in current_draft_equipment_ids:
+                result = gridforge_application.execute(
+                    RemoveDraftEquipmentCommand(draft_id=str(selected_id))
+                )
+                if not result.success:
+                    raise RuntimeError(result.message)
+                continue
+
+            # An earlier selected equipment item may have removed this draft
+            # wire as part of its canonical cascade. Do not report it as stale.
+            if str(selected_id) in initial_draft_connection_ids:
                 continue
 
             try:

@@ -152,7 +152,11 @@ class WireTool(ToolBase):
         return self._preview.source_endpoint is not None
 
     def on_mouse_double_click(self, event: Any) -> bool:
-        return self.on_mouse_press(event)
+        # Qt delivers a double-click event in addition to its press/release
+        # sequence. Treat it as handled, but never feed it back into the
+        # endpoint-capture state machine or submit a second connection.
+        self._ensure_active()
+        return self._preview.source_endpoint is not None
 
     def on_key_press(self, event: Any) -> bool:
         self._ensure_active()
