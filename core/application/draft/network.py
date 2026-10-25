@@ -289,11 +289,30 @@ class DraftNetwork:
         # opposite endpoint before preparing Core commands.
 
     def add_connection(self, connection: DraftConnection) -> None:
-        if connection.connection_id in self._connections: raise ValueError(f"Draft connection already exists: {connection.connection_id}")
-        if connection.connection_kind != "simple_wire": raise ValueError("Only simple_wire DraftConnection is supported by the canonical authoring contract.")
+        if connection.connection_id in self._connections:
+            raise ValueError(f"Draft connection already exists: {connection.connection_id}")
+        if connection.connection_kind != "simple_wire":
+            raise ValueError("Only simple_wire DraftConnection is supported by the canonical authoring contract.")
         self._validate_endpoint(connection.source, connection_id=connection.connection_id)
         self._validate_endpoint(connection.target, connection_id=connection.connection_id)
-        self._connections[connection.connection_id] = connection; self.validation_state = {}
+        # Endpoint-pair uniqueness is enforced at mutation time as well as
+        # validation time. Wire direction is not semantic for a simple wire.
+        for existing in self._connections.values():
+            same_direction = (
+                existing.source == connection.source
+                and existing.target == connection.target
+            )
+            reverse_direction = (
+                existing.source == connection.target
+                and existing.target == connection.source
+            )
+            if same_direction or reverse_direction:
+                raise ValueError(
+                    "A draft simple wire already connects these endpoints "
+                    f"({existing.connection_id!r})."
+                )
+        self._connections[connection.connection_id] = connection
+        self.validation_state = {}
 
     def remove_connection(self, connection_id: str) -> DraftConnection:
         connection = self._connections.pop(connection_id)
