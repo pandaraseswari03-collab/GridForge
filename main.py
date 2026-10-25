@@ -404,6 +404,9 @@ def _build_application_impl(resources: dict[str, object]) -> tuple[QApplication,
 
     def _show_study_cases() -> None:
         _activate_workspace(STUDY_WORKSPACE_ID, "study")
+        # The Study Cases widget is hosted in the Study Editor's explorer
+        # Region. Reveal the declared Region before asking the realizer to focus it.
+        workspace_surface_host.set_region_visible("study", "explorer", True)
         workspace_controller.realizer.focus_region("main-study", "explorer")
 
     def _show_unconfigured_surface(title: str) -> None:
